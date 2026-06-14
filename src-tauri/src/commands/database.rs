@@ -78,7 +78,7 @@ pub async fn db_tx(app: AppHandle, statements: Vec<TxStatement>) -> Result<TxRes
 }
 
 /// Bind a JSON value to a query, mapping it to the appropriate SQLite type.
-fn bind_json<'q>(
+pub(crate) fn bind_json<'q>(
     query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
     value: &'q serde_json::Value,
 ) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {

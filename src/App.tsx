@@ -3,9 +3,11 @@ import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
 import LoginPage from "@/routes/LoginPage";
 import SetupScreen from "@/routes/SetupScreen";
+import NetworkSetupScreen from "@/routes/NetworkSetupScreen";
 import { useAuthStore } from "@/stores/auth";
 import { useBrandStore } from "@/stores/brand";
 import { needsSetup } from "@/lib/repos/auth";
+import { getNetMode, getNetConfig, startHostServer } from "@/lib/net";
 import { hasAccess } from "@/lib/roles";
 
 // Route-level code splitting (React.lazy + Suspense in AppLayout).
@@ -41,14 +43,35 @@ function Protected({ path, children }: { path: string; children: ReactElement })
 export default function App() {
   const ready = useAuthStore((s) => s.ready);
   const user = useAuthStore((s) => s.user);
+  const [netReady, setNetReady] = useState(getNetMode() !== null);
   const [setupNeeded, setSetupNeeded] = useState<boolean | null>(null);
 
-  useEffect(() => {
+  // Once the machine's network mode is known, init auth/brand and (for a client)
+  // query the host to decide whether first-run owner setup is still needed.
+  async function proceed() {
     useAuthStore.getState().init();
     void useBrandStore.getState().init();
-    needsSetup().then(setSetupNeeded).catch(() => setSetupNeeded(false));
+    try {
+      setSetupNeeded(await needsSetup());
+    } catch {
+      setSetupNeeded(false);
+    }
+  }
+
+  useEffect(() => {
+    const mode = getNetMode();
+    if (mode === null) return; // first launch: show the network setup screen
+    if (mode === "host") {
+      const cfg = getNetConfig();
+      void startHostServer(cfg.port, cfg.key).catch(() => undefined);
+    }
+    void proceed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  if (!netReady) {
+    return <NetworkSetupScreen onDone={() => { setNetReady(true); void proceed(); }} />;
+  }
   if (!ready || setupNeeded === null) return null;
   if (setupNeeded && !user) return <SetupScreen onDone={() => setSetupNeeded(false)} />;
   if (!user) return <LoginPage />;

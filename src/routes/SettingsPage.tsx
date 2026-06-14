@@ -1,6 +1,5 @@
 import { useState, type ChangeEvent } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { Plus, Trash2, Save, Plug, Gift, Upload } from "lucide-react";
+import { Plus, Trash2, Save, Plug, Gift, Upload, Network, Copy, Printer } from "lucide-react";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -37,6 +36,8 @@ import { useThemeStore } from "@/stores/theme";
 import { useAuthStore } from "@/stores/auth";
 import { useBrandStore } from "@/stores/brand";
 import { fileToLogoDataUrl } from "@/lib/image";
+import { callCommand, getNetConfig, getLanIp, checkHost, clearNetConfig, DEFAULT_PORT } from "@/lib/net";
+import { printReceipt, sampleReceipt } from "@/lib/receipt";
 import { ROLE_LABEL } from "@/lib/roles";
 import { formatBasisPoints, dollarsToCents } from "@/lib/format";
 import type { ThemeMode, TechRole } from "@/types";
@@ -58,6 +59,7 @@ export default function SettingsPage() {
           <TabsTrigger value="technicians">Technicians</TabsTrigger>
           <TabsTrigger value="payments">Payments</TabsTrigger>
           <TabsTrigger value="rewards">Rewards</TabsTrigger>
+          <TabsTrigger value="network">Network</TabsTrigger>
           <TabsTrigger value="appearance">Appearance</TabsTrigger>
           <TabsTrigger value="database">Database</TabsTrigger>
         </TabsList>
@@ -68,10 +70,16 @@ export default function SettingsPage() {
           <TechniciansSettings />
         </TabsContent>
         <TabsContent value="payments">
-          <PaymentsSettings />
+          <div className="space-y-4">
+            <PaymentsSettings />
+            <ReceiptSettings />
+          </div>
         </TabsContent>
         <TabsContent value="rewards">
           <RewardsSettings />
+        </TabsContent>
+        <TabsContent value="network">
+          <NetworkSettings />
         </TabsContent>
         <TabsContent value="appearance">
           <AppearanceSettings />
@@ -389,7 +397,7 @@ function PaymentsSettings() {
     }
     setRefunding(true);
     try {
-      const res = await invoke<{ status: string }>("square_refund_payment", {
+      const res = await callCommand<{ status: string }>("square_refund_payment", {
         paymentId: refund.id.trim(),
         amountCents: dollarsToCents(refund.amount),
         reason: "Manual refund",
@@ -432,7 +440,7 @@ function PaymentsSettings() {
     setTesting(true);
     try {
       await persist();
-      const name = await invoke<string>("square_test_connection");
+      const name = await callCommand<string>("square_test_connection");
       toast.success(`Connected to ${name}`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Connection failed");
@@ -518,6 +526,75 @@ function PaymentsSettings() {
   );
 }
 
+function ReceiptSettings() {
+  const { data, loading } = useAsync(loadSettings, []);
+  const [width, setWidth] = useState<string | null>(null);
+  const [footer, setFooter] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  if (loading || !data) return <div className="text-sm text-muted-foreground">Loading...</div>;
+  const settings = data;
+  const widthVal = width ?? String(num(settings["pos.receipt_width_mm"], 80));
+  const footerVal = footer ?? str(settings["pos.receipt_footer"], "Thank you for your business!");
+
+  async function save() {
+    setSaving(true);
+    try {
+      await setSetting("pos.receipt_width_mm", Number(widthVal) === 58 ? 58 : 80);
+      await setSetting("pos.receipt_footer", footerVal);
+      toast.success("Receipt settings saved");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function testPrint() {
+    await save();
+    try {
+      await printReceipt(sampleReceipt());
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not open the print dialog");
+    }
+  }
+
+  return (
+    <Card className="max-w-2xl">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><Printer className="h-4 w-4" /> Receipt printer</CardTitle>
+        <CardDescription>
+          Receipts are generated locally and printed to any USB or thermal receipt printer installed in Windows.
+          The same print dialog can also &quot;Save as PDF&quot;.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label>Paper width</Label>
+            <Select value={widthVal} onValueChange={setWidth}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="58">58 mm (small)</SelectItem>
+                <SelectItem value="80">80 mm (standard)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Footer message</Label>
+          <Input value={footerVal} onChange={(e) => setFooter(e.target.value)} placeholder="Thank you for your business!" />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Tip: in the print dialog, set your receipt printer as the destination and turn off margins / headers for the cleanest output.
+        </p>
+        <div className="flex gap-2">
+          <Button onClick={save} disabled={saving}><Save /> Save</Button>
+          <Button variant="outline" onClick={testPrint}><Printer /> Print test receipt</Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function RewardsSettings() {
   const { data, loading } = useAsync(loadSettings, []);
   const [enabled, setEnabled] = useState<boolean | null>(null);
@@ -573,6 +650,114 @@ function RewardsSettings() {
           With these rates, every $1 earns {earn} point{earn === 1 ? "" : "s"}, and {pointsPerDollarRedeem} points redeem for $1.
         </p>
         <Button onClick={save} disabled={saving}><Save /> Save</Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function NetworkSettings() {
+  const cfg = getNetConfig();
+  const role = useAuthStore((s) => s.user?.role);
+  const canManage = role === "owner" || role === "manager";
+  const { data: lanIp } = useAsync(getLanIp, []);
+  const [testing, setTesting] = useState(false);
+
+  const hostAddress = `http://${lanIp ?? "..."}:${cfg.port || DEFAULT_PORT}`;
+
+  function copy(text: string) {
+    void navigator.clipboard.writeText(text);
+    toast.success("Copied");
+  }
+
+  async function testHost() {
+    setTesting(true);
+    try {
+      const r = await checkHost(cfg.host, cfg.key);
+      toast.success(`Connected to ${r.shop || "host"}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not reach host");
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  function changeSetup() {
+    if (!confirm("Change this PC's network setup? The app will restart so you can pick a new mode.")) return;
+    clearNetConfig();
+    location.reload();
+  }
+
+  return (
+    <Card className="max-w-2xl">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><Network className="h-4 w-4" /> Multi-PC network</CardTitle>
+        <CardDescription>How this computer shares data with the rest of the shop.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {cfg.mode === "standalone" && (
+          <div className="rounded-md border border-border p-3 text-sm">
+            <div className="font-medium">Standalone</div>
+            <p className="text-xs text-muted-foreground">
+              This PC keeps its own database and is not connected to any other computer.
+            </p>
+          </div>
+        )}
+
+        {cfg.mode === "host" && (
+          <div className="space-y-3">
+            <div className="rounded-md border border-border p-3">
+              <div className="text-sm font-medium">This PC is the host (main)</div>
+              <p className="text-xs text-muted-foreground">
+                It owns the shop database and serves it to the other PCs. Keep it on and signed in
+                during business hours.
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Address for other PCs</Label>
+              <div className="flex gap-2">
+                <Input readOnly value={hostAddress} />
+                <Button variant="outline" size="icon" onClick={() => copy(hostAddress)}><Copy className="h-4 w-4" /></Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                On each other PC, choose &quot;Connect to the main PC&quot; and enter this address.
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Access key</Label>
+              <div className="flex gap-2">
+                <Input readOnly value={cfg.key || "(none)"} />
+                {cfg.key && (
+                  <Button variant="outline" size="icon" onClick={() => copy(cfg.key)}><Copy className="h-4 w-4" /></Button>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">Other PCs must enter this key to connect.</p>
+            </div>
+          </div>
+        )}
+
+        {cfg.mode === "client" && (
+          <div className="space-y-3">
+            <div className="rounded-md border border-border p-3">
+              <div className="text-sm font-medium">This PC is a client</div>
+              <p className="text-xs text-muted-foreground">It connects to the host PC for all data.</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Host address</Label>
+              <Input readOnly value={cfg.host} />
+            </div>
+            <Button variant="outline" onClick={testHost} disabled={testing}>
+              {testing ? "Testing..." : "Test connection"}
+            </Button>
+          </div>
+        )}
+
+        {canManage && (
+          <div className="border-t border-border pt-3">
+            <Button variant="ghost" className="text-muted-foreground" onClick={changeSetup}>
+              Change network setup
+            </Button>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

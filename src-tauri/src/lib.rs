@@ -7,6 +7,7 @@
 
 mod commands;
 mod db;
+mod server;
 
 /// SQLite connection string. Resolved by `tauri-plugin-sql` relative to the
 /// app config dir (on Windows: `%APPDATA%\com.userrepair.app`).
@@ -39,6 +40,10 @@ pub fn run() {
             commands::square::square_refund_payment,
             commands::system::open_external,
             commands::system::app_data_dir,
+            commands::net::net_post,
+            commands::net::net_health,
+            commands::net::start_host_server,
+            commands::net::host_lan_ip,
         ])
         .run(tauri::generate_context!())
         .expect("error while running userrepair");

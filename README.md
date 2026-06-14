@@ -15,6 +15,7 @@ Repair tickets - inventory with barcodes - microsoldering reference - point of s
 ![SQLite](https://img.shields.io/badge/SQLite-FTS5-003B57?logo=sqlite&logoColor=white)
 ![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D6?logo=windows&logoColor=white)
 ![Offline](https://img.shields.io/badge/Works-offline-2ea44f)
+![Multi-PC](https://img.shields.io/badge/Multi--PC-LAN%20sync-7C3AED)
 
 </div>
 
@@ -29,6 +30,8 @@ Repair tickets - inventory with barcodes - microsoldering reference - point of s
 - [First-run setup](#first-run-setup)
 - [Roles](#roles)
 - [Payments, rewards, and configuration](#payments-rewards-and-configuration)
+- [Hardware: receipt printers, scanners, card readers](#hardware-receipt-printers-scanners-card-readers)
+- [Running on multiple computers](#running-on-multiple-computers)
 - [Ringing out a repair ticket](#ringing-out-a-repair-ticket)
 - [Data, backup, and restore](#data-backup-and-restore)
 - [For developers](#for-developers)
@@ -56,8 +59,10 @@ Built with **Tauri 2 (Rust)** + **React + TypeScript**.
 | **Tenders** | Cash (with change due), keyed card and Square Terminal, redeem points, or any **split** across them |
 | **Ring out tickets** | Look up an open repair by customer phone or name and pull its parts and labor into the cart |
 | **Barcode scanner** | Any generic USB scanner adds items to the cart instantly |
+| **Card reader** | Swipe a generic 3-track USB reader (e.g. MSR90) to add a card payment without typing |
+| **Receipt printer** | Generates a clean local receipt for any USB / thermal printer, in 58mm or 80mm |
 | **Refunds / voids** | Reverse a sale (refunds card tenders via Square, restores stock); manager approval above a set amount |
-| **Receipts** | On-screen breakdown, change given, points earned, and a link to the Square receipt |
+| **Receipts** | On-screen breakdown, change given, points earned, a printable receipt, and a link to the Square receipt |
 
 ### 🔧 Repair shop
 
@@ -81,6 +86,7 @@ Built with **Tauri 2 (Rust)** + **React + TypeScript**.
 - **Rewards program**: earn points per dollar, redeem as a discount, configurable rates, full ledger.
 - **Accounts and roles**: owner, manager, technician, clerk, with Argon2-hashed passwords.
 - **Financial**: revenue / expense, P&L, invoices. **Reporting** with CSV export.
+- **Multi-PC**: run it on several computers in the shop, all sharing one machine's data over the LAN.
 - **Extras**: global search (`Ctrl+K`), backup and restore, your own logo, dark mode, plugin foundation.
 
 ---
@@ -152,8 +158,46 @@ Everything is under **Settings**:
   optional Terminal device id, and **Save & test connection**. Card data is tokenized in the
   app; the charge is made from the Rust backend so your **access token never leaves the machine**.
   Includes a manual refund tool. Refunds over a set amount require manager approval.
+- **Receipt** - choose 58mm or 80mm paper, set a footer message, and print a test receipt.
 - **Rewards** - turn the program on and set points-per-dollar and redemption value.
+- **Network** - see this PC's role (standalone / main / client) and connection details.
 - **Staff** - create accounts, reset passwords, deactivate.
+
+---
+
+## Hardware: receipt printers, scanners, card readers
+
+userrepair is built for off-the-shelf USB hardware. Nothing proprietary is required.
+
+| Device | How it works |
+|---|---|
+| **Receipt printer** | Any USB or thermal printer installed in Windows. userrepair builds its **own** clean receipt (logo, line items, totals, a scannable barcode of the sale number, and your footer) and prints it. Pick **58mm** or **80mm** under **Settings -> Payments -> Receipt**, and use **Print test receipt** to check alignment. The same print dialog can also **Save as PDF**. |
+| **Barcode scanner** | Any generic USB scanner (keyboard-wedge). Scan an item's barcode to add it to the cart; print barcode labels for inventory from the Inventory page. |
+| **Card reader** | Any generic 3-track USB magstripe reader, such as the **MSR90**. Swiping adds a card payment for the outstanding balance in one motion, reading the card brand, last 4, and name automatically. |
+
+> **About swiped cards and Square:** for PCI compliance, a generic magstripe reader cannot push a card into Square's secure charge flow, so a **swipe records the card payment** (brand + last 4 only; the full card number is never stored or sent). To **charge** a card through Square, use the keyed card field or a **Square Terminal / Reader** (the Terminal tender), which encrypts the card in hardware.
+
+---
+
+## Running on multiple computers
+
+Have more than one PC in the shop? One computer holds the data and the others connect to it, so tickets, inventory, sales, and accounts are shared live.
+
+On the **first launch**, each PC asks how it should run:
+
+| Choice | Use it on |
+|---|---|
+| **Just this PC** | A single-computer shop (you can add PCs later). |
+| **This is the main PC** | The owner's computer. It holds the database and serves the others. It shows an address like `http://192.168.1.50:8787` and an optional access key. |
+| **Connect to the main PC** | Every other computer. Enter the main PC's address and key, and it joins instantly. |
+
+A few things to know:
+
+- All PCs must be on the **same local network**. No internet or cloud is involved.
+- Keep the **main PC on and signed in** during business hours, since it holds the data.
+- The first time the main PC starts serving, **Windows may ask to allow it on your network** - choose Allow.
+- Set an **access key** on the main PC so only your computers can connect.
+- You can review or change any PC's role later under **Settings -> Network**.
 
 ---
 
@@ -215,13 +259,14 @@ Passwords use Argon2id.
 src/                  React + TypeScript frontend
   routes/             one page per module (POS, tickets, inventory, ...)
   components/         ui/ (shadcn), layout/, shared/, pos/, customers/
-  lib/                db.ts, repos/ (data access), validators, format, roles, image
+  lib/                db.ts, net.ts (LAN routing), receipt.ts, magstripe.ts, repos/, validators, format, roles, image
   stores/             Zustand (auth, theme, ui, brand)
-  hooks/              useAsync, useBarcodeScanner
+  hooks/              useAsync, useBarcodeScanner, useCardSwipe
   types/              shared types (no any)
 src-tauri/            Rust backend
   src/db/             migrations.rs + schema.sql + seed_*.sql
-  src/commands/       db_tx, square, auth, backup, attachments, system
+  src/commands/       db_tx, square, auth, backup, attachments, system, net
+  src/server.rs       embedded LAN host server (axum) for multi-PC mode
   capabilities/       Tauri 2 ACL
 scripts/              icon + catalog generators
 plugins/              example plugin manifest
@@ -237,7 +282,16 @@ plugins/              example plugin manifest
   generated by `scripts/seed-reference.mjs` into the seed SQL files.
 - Native Rust commands are limited to what the webview cannot do safely: `db_tx`, Square
   payment / refund / terminal calls, password hashing, attachment storage with hash-dedup,
-  backup / restore ZIPs, and shell-open for boardview / PDF files.
+  backup / restore ZIPs, shell-open for boardview / PDF files, and the multi-PC networking
+  commands (`net_post`, `start_host_server`, `host_lan_ip`).
+- Multi-PC mode routes the entire data layer through one chokepoint: in client mode,
+  `lib/db.ts` and the Square caller forward to the host's `src/server.rs` (axum) over the LAN
+  instead of the local SQLite. The host serves `/db/select`, `/db/execute`, `/db/tx`, and a
+  `/cmd` proxy, gated by a shared key. Network role is stored per-machine in `localStorage`.
+- Receipts are generated locally as a width-correct (58mm / 80mm) HTML document and printed
+  through a hidden iframe, so any installed printer works and the dialog can save a PDF. A
+  generic 3-track card reader is read as a HID keyboard-wedge (`useCardSwipe`) and parsed to
+  brand + last 4 only; the full PAN is never stored or transmitted.
 - Conventions: integer-cent money, ISO 8601 UTC dates, soft deletes, foreign keys on,
   transactional multi-table writes.
 

@@ -7,6 +7,7 @@
 import Database from "@tauri-apps/plugin-sql";
 import { invoke } from "@tauri-apps/api/core";
 import type { SqlParam, TxStatement } from "@/types";
+import { isClient, hostPost } from "@/lib/net";
 
 const DB_URL = "sqlite:userrepair.db";
 
@@ -30,6 +31,10 @@ export function getDb(): Promise<Database> {
 
 /** Run a SELECT and return all rows typed as `T`. */
 export async function select<T>(sql: string, params: SqlParam[] = []): Promise<T[]> {
+  if (isClient()) {
+    const res = await hostPost("/db/select", { sql, params });
+    return (res.rows ?? []) as T[];
+  }
   const db = await getDb();
   return db.select<T[]>(sql, params);
 }
@@ -47,6 +52,13 @@ export interface RunResult {
 
 /** Run a single write statement. Returns rows affected and last insert id. */
 export async function run(sql: string, params: SqlParam[] = []): Promise<RunResult> {
+  if (isClient()) {
+    const res = await hostPost("/db/execute", { sql, params });
+    return {
+      rowsAffected: typeof res.rowsAffected === "number" ? res.rowsAffected : 0,
+      lastInsertId: typeof res.lastInsertId === "number" ? res.lastInsertId : 0,
+    };
+  }
   const db = await getDb();
   const result = await db.execute(sql, params);
   return {
@@ -65,6 +77,10 @@ interface TxResult {
  * Returns the `last_insert_rowid()` after each statement.
  */
 export async function tx(statements: TxStatement[]): Promise<number[]> {
+  if (isClient()) {
+    const res = await hostPost("/db/tx", { statements });
+    return (res.insertIds ?? []) as number[];
+  }
   const result = await invoke<TxResult>("db_tx", { statements });
   return result.insert_ids;
 }

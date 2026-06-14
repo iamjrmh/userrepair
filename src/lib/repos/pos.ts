@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
 import { getOne, run, select, tx } from "@/lib/db";
+import { callCommand } from "@/lib/net";
 import { logActivity } from "@/lib/repos/activity";
 import { addTransaction } from "@/lib/repos/financial";
 import { adjustStock } from "@/lib/repos/inventory";
@@ -285,7 +285,7 @@ export async function voidSale(saleId: number, authorizedBy?: string): Promise<v
 
   for (const p of payments) {
     if (p.square_payment_id && (p.method === "card" || p.method === "terminal")) {
-      await invoke("square_refund_payment", {
+      await callCommand("square_refund_payment", {
         paymentId: p.square_payment_id,
         amountCents: p.amount_cents,
         reason: `Void ${sale.sale_number}`,

@@ -36,6 +36,11 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 uuid = { version = "1", features = ["v4"] }
 # Password hashing for employee accounts.
 argon2 = "0.5"
+# Multi-PC networking: the host machine runs a small LAN server (axum) that
+# serves DB operations to client machines over the local network. tokio's net
+# feature provides the TcpListener axum::serve binds to.
+axum = "0.7"
+tokio = { version = "1", features = ["net", "rt-multi-thread"] }
 
 [profile.release]
 panic = "abort"

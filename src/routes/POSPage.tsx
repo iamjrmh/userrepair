@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { callCommand } from "@/lib/net";
 import {
   CreditCard,
   Banknote,
@@ -9,6 +10,7 @@ import {
   Trash2,
   Receipt,
   ExternalLink,
+  Printer,
   Settings,
   Ticket,
   Search,
@@ -52,15 +54,11 @@ import {
 } from "@/lib/square";
 import { formatCents, dollarsToCents, centsToDollars, formatRelative } from "@/lib/format";
 import type { SquarePaymentResult, SquareTerminalResult, PosSale } from "@/types";
+import { printReceipt, type ReceiptPayload } from "@/lib/receipt";
+import { useCardSwipe } from "@/hooks/useCardSwipe";
+import type { SwipedCard } from "@/lib/magstripe";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-interface ReceiptData {
-  number: string;
-  total: number;
-  tenders: PosTender[];
-  earnedPoints: number;
-}
 
 export default function POSPage() {
   const { data: items } = useAsync(listItems, []);
@@ -79,7 +77,7 @@ export default function POSPage() {
   const [discount, setDiscount] = useState("0.00");
   const [tenders, setTenders] = useState<PosTender[]>([]);
   const [processing, setProcessing] = useState(false);
-  const [receipt, setReceipt] = useState<ReceiptData | null>(null);
+  const [receipt, setReceipt] = useState<ReceiptPayload | null>(null);
   const [ringTicketId, setRingTicketId] = useState<number | null>(null);
   const [ringNumber, setRingNumber] = useState<string | null>(null);
   const [ticketQuery, setTicketQuery] = useState("");
@@ -126,7 +124,10 @@ export default function POSPage() {
   }
 
   const handleScan = useCallback(async (code: string) => {
-    const item = await findItemBySku(code.trim());
+    const trimmed = code.trim();
+    // Magstripe swipes also end with Enter; the card-swipe hook handles those.
+    if (/^[%;]/.test(trimmed)) return;
+    const item = await findItemBySku(trimmed);
     if (!item) {
       toast.error(`No item with code ${code}`);
       return;
@@ -140,6 +141,27 @@ export default function POSPage() {
   }, []);
 
   useBarcodeScanner((code) => void handleScan(code));
+
+  // Generic 3-track USB card reader (e.g. MSR90): a swipe records a card tender
+  // for the outstanding balance. Card data is summarized to brand + last 4; the
+  // full number is never stored or sent (see lib/magstripe.ts).
+  const addSwipedCard = useCallback(
+    (card: SwipedCard) => {
+      const amount = remaining > 0 ? remaining : totals.total_cents;
+      if (amount <= 0) {
+        toast.error("Add items before swiping a card");
+        return;
+      }
+      setTenders((t) => [
+        ...t,
+        { method: "card", amount_cents: amount, card_brand: card.brand, last4: card.last4 },
+      ]);
+      toast.success(`${card.brand} ****${card.last4}${card.name ? ` (${card.name})` : ""} added`);
+    },
+    [remaining, totals.total_cents],
+  );
+  useCardSwipe(addSwipedCard, !receipt && !processing && cart.length > 0);
+
   function setQty(idx: number, qty: number) {
     setCart((c) => c.map((it, i) => (i === idx ? { ...it, quantity: Number.isFinite(qty) && qty > 0 ? qty : it.quantity } : it)));
     setTenders([]);
@@ -181,7 +203,7 @@ export default function POSPage() {
   async function addCardTender(token: string, amountCents: number) {
     setProcessing(true);
     try {
-      const res = await invoke<SquarePaymentResult>("square_create_payment", {
+      const res = await callCommand<SquarePaymentResult>("square_create_payment", {
         sourceId: token,
         amountCents,
         referenceId: null,
@@ -202,12 +224,12 @@ export default function POSPage() {
   async function addTerminalTender(amountCents: number) {
     setProcessing(true);
     try {
-      const start = await invoke<SquareTerminalResult>("square_terminal_checkout", { amountCents, referenceId: null, note: "userrepair POS" });
+      const start = await callCommand<SquareTerminalResult>("square_terminal_checkout", { amountCents, referenceId: null, note: "userrepair POS" });
       let status = start.status;
       let paymentId = start.payment_id;
       for (let i = 0; i < 90 && (status === "PENDING" || status === "IN_PROGRESS"); i += 1) {
         await sleep(2000);
-        const s = await invoke<SquareTerminalResult>("square_terminal_status", { checkoutId: start.checkout_id });
+        const s = await callCommand<SquareTerminalResult>("square_terminal_status", { checkoutId: start.checkout_id });
         status = s.status;
         paymentId = s.payment_id;
       }
@@ -234,7 +256,21 @@ export default function POSPage() {
         note: linkedTicket ? `Ticket #${linkedTicket}` : null,
       });
       if (linkedTicket) await markTicketCompleted(linkedTicket);
-      setReceipt({ number: sale.number, total: totals.total_cents, tenders, earnedPoints: sale.earnedPoints });
+      setReceipt({
+        number: sale.number,
+        dateIso: new Date().toISOString(),
+        lines: cart.map((c) => ({
+          description: c.description,
+          quantity: c.quantity,
+          unit_price_cents: c.unit_price_cents,
+        })),
+        subtotalCents: totals.subtotal_cents,
+        discountCents: dollarsToCents(discount),
+        taxCents: totals.tax_cents,
+        totalCents: totals.total_cents,
+        tenders,
+        earnedPoints: sale.earnedPoints,
+      });
       resetSale();
       reloadRecent();
       toast.success(`Sale ${sale.number} complete`);
@@ -445,6 +481,11 @@ export default function POSPage() {
                     onTerminal={addTerminalTender}
                     onRewards={addRewardsTender}
                   />
+                ) : null}
+                {remaining > 0 ? (
+                  <p className="text-center text-[11px] text-muted-foreground">
+                    Tip: swipe a USB card reader to add a card payment without typing.
+                  </p>
                 ) : (
                   <Button className="w-full" disabled={processing || cart.length === 0} onClick={finish}>
                     Finish &amp; record sale
@@ -721,7 +762,7 @@ function CardCheckout({
   );
 }
 
-function ReceiptPanel({ receipt, onDone }: { receipt: ReceiptData; onDone: () => void }) {
+function ReceiptPanel({ receipt, onDone }: { receipt: ReceiptPayload; onDone: () => void }) {
   const totalChange = receipt.tenders.reduce((s, t) => s + (t.change_cents ?? 0), 0);
   const cardReceipt = receipt.tenders.find((t) => t.receipt_url)?.receipt_url;
   return (
@@ -729,7 +770,7 @@ function ReceiptPanel({ receipt, onDone }: { receipt: ReceiptData; onDone: () =>
       <Receipt className="mx-auto h-8 w-8 text-success" />
       <div>
         <div className="font-semibold">{receipt.number} paid</div>
-        <div className="text-2xl font-bold tabular-nums">{formatCents(receipt.total)}</div>
+        <div className="text-2xl font-bold tabular-nums">{formatCents(receipt.totalCents)}</div>
       </div>
       <div className="space-y-0.5 text-sm">
         {receipt.tenders.map((t, i) => (
@@ -750,6 +791,9 @@ function ReceiptPanel({ receipt, onDone }: { receipt: ReceiptData; onDone: () =>
           <Gift className="h-4 w-4" /> Earned {receipt.earnedPoints} points
         </div>
       )}
+      <Button variant="outline" size="sm" className="w-full" onClick={() => void printReceipt(receipt)}>
+        <Printer /> Print receipt
+      </Button>
       {cardReceipt && (
         <Button variant="outline" size="sm" onClick={() => void invoke("open_external", { path: cardReceipt })}>
           <ExternalLink /> View Square receipt

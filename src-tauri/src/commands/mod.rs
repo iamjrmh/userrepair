@@ -5,5 +5,6 @@ pub mod attachments;
 pub mod auth;
 pub mod backup;
 pub mod database;
+pub mod net;
 pub mod square;
 pub mod system;
