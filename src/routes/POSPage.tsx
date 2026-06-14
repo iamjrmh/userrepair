@@ -58,6 +58,7 @@ import { formatCents, dollarsToCents, centsToDollars, formatRelative } from "@/l
 import type { SquarePaymentResult, SquareTerminalResult, PosSale } from "@/types";
 import { printReceipt, type ReceiptPayload } from "@/lib/receipt";
 import { useThemeStore } from "@/stores/theme";
+import { useSyncStore } from "@/lib/sync";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -687,6 +688,7 @@ function CardCheckout({
   const [error, setError] = useState<string | null>(null);
   const [tokenizing, setTokenizing] = useState(false);
   const themeMode = useThemeStore((s) => s.mode);
+  const internet = useSyncStore((s) => s.internet);
 
   useEffect(() => {
     let active = true;
@@ -745,11 +747,16 @@ function CardCheckout({
           <p className="mt-2 text-xs text-muted-foreground">Loading secure card field...</p>
         )}
         {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
+        {!internet && (
+          <p className="mt-2 text-xs text-warning">
+            No internet connection. Card payments need internet - take cash or retry once youre back online.
+          </p>
+        )}
         <p className="mt-2.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
           <Lock className="h-3 w-3 shrink-0" /> Encrypted and processed by Square. Card numbers never touch this app.
         </p>
       </div>
-      <Button className="w-full" size="lg" disabled={disabled || !ready || tokenizing} onClick={pay}>
+      <Button className="w-full" size="lg" disabled={disabled || !ready || tokenizing || !internet} onClick={pay}>
         {tokenizing ? (
           "Processing..."
         ) : (
@@ -768,7 +775,17 @@ function CardCheckout({
  */
 function squareCardStyle(): SquareCardStyle {
   const root = getComputedStyle(document.documentElement);
-  const v = (name: string) => `hsl(${root.getPropertyValue(name).trim()})`;
+  // Square's card style only accepts hex colors, not the space-separated
+  // hsl() syntax our theme variables use. A canvas context normalizes any
+  // valid CSS color back to a #rrggbb string, so use it as the converter.
+  const ctx = document.createElement("canvas").getContext("2d");
+  const toHex = (cssColor: string): string => {
+    if (!ctx) return cssColor;
+    ctx.fillStyle = "#000000";
+    ctx.fillStyle = cssColor;
+    return ctx.fillStyle as string;
+  };
+  const v = (name: string) => toHex(`hsl(${root.getPropertyValue(name).trim()})`);
   return {
     input: {
       color: v("--foreground"),

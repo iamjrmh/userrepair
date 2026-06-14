@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Package, Plus, Search, AlertTriangle, ArrowUpDown, Trash2, ScanLine, Printer } from "lucide-react";
+import { Package, Plus, Search, AlertTriangle, ArrowUpDown, Trash2, ScanLine, Printer, Pencil, Copy } from "lucide-react";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { DataTable } from "@/components/shared/DataTable";
 import { EmptyState } from "@/components/shared/EmptyState";
@@ -33,11 +33,13 @@ import {
   listItems,
   getItem,
   createItem,
+  updateItem,
   adjustStock,
   deleteItem,
   listAudit,
   lowStockItems,
   inventoryValueCents,
+  inventorySaleTotalCents,
   listLocations,
   createLocation,
   findItemBySku,
@@ -45,7 +47,7 @@ import {
 } from "@/lib/repos/inventory";
 import { inventoryItemSchema } from "@/lib/validators";
 import { useBarcodeScanner } from "@/hooks/useBarcodeScanner";
-import { formatCents, dollarsToCents, formatDateTime } from "@/lib/format";
+import { formatCents, dollarsToCents, centsToDollars, formatDateTime } from "@/lib/format";
 import type { InventoryItem } from "@/types";
 
 const CATEGORIES = [
@@ -55,28 +57,33 @@ const CATEGORIES = [
   "Battery",
   "Charging Port / Connector",
   "IC / Chip",
-  "MOSFET / Transistor",
-  "Capacitor / Resistor",
+  "MOSFET / Transistor / Diode",
+  "Capacitor / Resistor / Inductor",
   "Flex Cable",
   "Housing / Frame",
   "Tool / Consumable",
   "Other Component",
 ];
 
+type ItemFormState =
+  | { mode: "create" }
+  | { mode: "edit" | "duplicate"; source: InventoryItemRow };
+
 export default function InventoryPage() {
   const { data, loading, reload } = useAsync(
     async () => {
-      const [items, low, value] = await Promise.all([
+      const [items, low, value, saleTotal] = await Promise.all([
         listItems(),
         lowStockItems(),
         inventoryValueCents(),
+        inventorySaleTotalCents(),
       ]);
-      return { items, low, value };
+      return { items, low, value, saleTotal };
     },
     [],
   );
   const [filter, setFilter] = useState("");
-  const [createOpen, setCreateOpen] = useState(false);
+  const [itemForm, setItemForm] = useState<ItemFormState | null>(null);
   const [adjustItem, setAdjustItem] = useState<InventoryItemRow | null>(null);
   const [detailItem, setDetailItem] = useState<InventoryItemRow | null>(null);
   const [labelItemId, setLabelItemId] = useState<number | null>(null);
@@ -112,9 +119,17 @@ export default function InventoryPage() {
         header: "",
         enableSorting: false,
         cell: (c) => (
-          <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); setAdjustItem(c.row.original); }}>
-            <ArrowUpDown /> Adjust
-          </Button>
+          <div className="flex items-center justify-end gap-1">
+            <Button variant="ghost" size="icon-sm" aria-label="Edit item" title="Edit" onClick={(e) => { e.stopPropagation(); setItemForm({ mode: "edit", source: c.row.original }); }}>
+              <Pencil />
+            </Button>
+            <Button variant="ghost" size="icon-sm" aria-label="Duplicate item" title="Duplicate" onClick={(e) => { e.stopPropagation(); setItemForm({ mode: "duplicate", source: c.row.original }); }}>
+              <Copy />
+            </Button>
+            <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); setAdjustItem(c.row.original); }}>
+              <ArrowUpDown /> Adjust
+            </Button>
+          </div>
         ),
       },
     ],
@@ -126,13 +141,14 @@ export default function InventoryPage() {
       <PageHeader
         title="Inventory"
         description="Parts, components, and consumables with full audit history."
-        actions={<Button onClick={() => setCreateOpen(true)}><Plus /> New item</Button>}
+        actions={<Button onClick={() => setItemForm({ mode: "create" })}><Plus /> New item</Button>}
       />
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard label="Distinct items" value={String(data?.items.length ?? 0)} />
         <StatCard label="Low stock" value={String(data?.low.length ?? 0)} warn={(data?.low.length ?? 0) > 0} />
         <StatCard label="Inventory value" value={formatCents(data?.value ?? 0)} />
+        <StatCard label="Sale total" value={formatCents(data?.saleTotal ?? 0)} />
       </div>
 
       <Tabs defaultValue="all" className="flex min-h-0 flex-1 flex-col">
@@ -169,7 +185,7 @@ export default function InventoryPage() {
               data={data?.items ?? []}
               globalFilter={filter}
               onRowClick={(row) => setDetailItem(row)}
-              empty={<EmptyState icon={Package} title="No inventory" description="Add parts and consumables to track stock." action={<Button onClick={() => setCreateOpen(true)}><Plus /> New item</Button>} />}
+              empty={<EmptyState icon={Package} title="No inventory" description="Add parts and consumables to track stock." action={<Button onClick={() => setItemForm({ mode: "create" })}><Plus /> New item</Button>} />}
             />
           )}
         </TabsContent>
@@ -182,7 +198,19 @@ export default function InventoryPage() {
         </TabsContent>
       </Tabs>
 
-      <ItemFormDialog open={createOpen} onOpenChange={setCreateOpen} onSaved={(id) => { reload(); setLabelItemId(id); }} categories={CATEGORIES} />
+      {itemForm && (
+        <ItemFormDialog
+          mode={itemForm.mode}
+          source={itemForm.mode === "create" ? undefined : itemForm.source}
+          onClose={() => setItemForm(null)}
+          onSaved={(id, mode) => {
+            reload();
+            // Offer a fresh barcode label for brand-new and duplicated items only.
+            if (mode !== "edit") setLabelItemId(id);
+          }}
+          categories={CATEGORIES}
+        />
+      )}
       {labelItemId !== null && <LabelDialog itemId={labelItemId} onClose={() => setLabelItemId(null)} />}
       {adjustItem && (
         <AdjustStockDialog item={adjustItem} onClose={() => setAdjustItem(null)} onSaved={reload} />
@@ -196,6 +224,14 @@ export default function InventoryPage() {
             setAdjustItem(detailItem);
             setDetailItem(null);
           }}
+          onEdit={() => {
+            setItemForm({ mode: "edit", source: detailItem });
+            setDetailItem(null);
+          }}
+          onDuplicate={() => {
+            setItemForm({ mode: "duplicate", source: detailItem });
+            setDetailItem(null);
+          }}
         />
       )}
     </div>
@@ -207,11 +243,15 @@ function ItemDetailDialog({
   onClose,
   onChanged,
   onAdjust,
+  onEdit,
+  onDuplicate,
 }: {
   item: InventoryItemRow;
   onClose: () => void;
   onChanged: () => void;
   onAdjust: () => void;
+  onEdit: () => void;
+  onDuplicate: () => void;
 }) {
   const { data: audit } = useAsync(() => listAudit(item.id), [item.id]);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -259,11 +299,12 @@ function ItemDetailDialog({
             </div>
           </div>
         </div>
-        <DialogFooter>
+        <DialogFooter className="flex-wrap">
           <Button variant="destructive" onClick={() => setConfirmDelete(true)}><Trash2 /> Remove</Button>
+          <Button variant="outline" onClick={onDuplicate}><Copy /> Duplicate</Button>
           <Button variant="outline" onClick={() => window.print()}><Printer /> Print label</Button>
           <Button variant="outline" onClick={onAdjust}><ArrowUpDown /> Adjust stock</Button>
-          <Button onClick={onClose}>Close</Button>
+          <Button onClick={onEdit}><Pencil /> Edit</Button>
         </DialogFooter>
       </DialogContent>
       <ConfirmDialog
@@ -297,68 +338,123 @@ function StatCard({ label, value, warn }: { label: string; value: string; warn?:
   );
 }
 
+type ItemFormMode = "create" | "edit" | "duplicate";
+
+const TITLE_BY_MODE: Record<ItemFormMode, string> = {
+  create: "New inventory item",
+  edit: "Edit inventory item",
+  duplicate: "Duplicate inventory item",
+};
+
+const SUBMIT_BY_MODE: Record<ItemFormMode, string> = {
+  create: "Add item",
+  edit: "Save changes",
+  duplicate: "Save copy",
+};
+
 function ItemFormDialog({
-  open,
-  onOpenChange,
+  mode,
+  source,
+  onClose,
   onSaved,
   categories,
 }: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  onSaved: (id: number) => void;
+  mode: ItemFormMode;
+  source?: InventoryItemRow;
+  onClose: () => void;
+  onSaved: (id: number, mode: ItemFormMode) => void;
   categories: string[];
 }) {
   const { data: locations, reload: reloadLocations } = useAsync(listLocations, []);
   const [newLocOpen, setNewLocOpen] = useState(false);
-  const [form, setForm] = useState({
-    description: "",
-    sku: "",
-    category: categories[0] ?? "Other Component",
-    locationId: "none",
-    quantity: "0",
-    threshold: "0",
-    cost: "0.00",
-    price: "0.00",
-    modelNumber: "",
-    serial: "",
-  });
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState(() =>
+    source
+      ? {
+          description: source.description,
+          sku: source.sku ?? "",
+          category: source.category,
+          locationId: source.location_id ? String(source.location_id) : "none",
+          quantity: String(source.quantity),
+          threshold: String(source.low_stock_threshold),
+          cost: centsToDollars(source.unit_cost_cents),
+          price: centsToDollars(source.sale_price_cents),
+          modelNumber: source.model_number ?? "",
+          serial: source.serial_number ?? "",
+        }
+      : {
+          description: "",
+          sku: "",
+          category: categories[0] ?? "Other Component",
+          locationId: "none",
+          quantity: "0",
+          threshold: "0",
+          cost: "0.00",
+          price: "0.00",
+          modelNumber: "",
+          serial: "",
+        },
+  );
 
   const isDevice = form.category === "Device (Resale)" || form.category === "Accessory";
+  const isEdit = mode === "edit";
 
   function set<K extends keyof typeof form>(key: K, value: string) {
     setForm((f) => ({ ...f, [key]: value }));
   }
 
   async function submit() {
+    // Carry over fields the form does not expose (reference catalog metadata,
+    // consumable flags) so an edit or copy never wipes them.
     const parsed = inventoryItemSchema.safeParse({
       description: form.description,
       sku: form.sku,
       category: form.category,
+      subcategory: source?.subcategory ?? "",
+      package_type: source?.package_type ?? "",
+      value: source?.value ?? "",
+      package_size: source?.package_size ?? "",
       location_id: form.locationId === "none" ? null : Number(form.locationId),
       quantity: Number(form.quantity) || 0,
       low_stock_threshold: Number(form.threshold) || 0,
       unit_cost_cents: dollarsToCents(form.cost),
       sale_price_cents: dollarsToCents(form.price),
-      is_consumable: false,
-      model_number: isDevice ? form.modelNumber : "",
-      serial_number: isDevice ? form.serial : "",
+      is_consumable: Boolean(source?.is_consumable),
+      consumable_unit: source?.consumable_unit ?? "",
+      notes: source?.notes ?? "",
+      model_number: isDevice ? form.modelNumber : source?.model_number ?? "",
+      serial_number: isDevice ? form.serial : source?.serial_number ?? "",
     });
     if (!parsed.success) {
       toast.error(parsed.error.issues[0]?.message ?? "Invalid item");
       return;
     }
-    const id = await createItem(parsed.data);
-    toast.success("Item added");
-    onOpenChange(false);
-    onSaved(id);
+    setSaving(true);
+    try {
+      if (isEdit && source) {
+        await updateItem(source.id, parsed.data);
+        toast.success("Item updated");
+        onClose();
+        onSaved(source.id, "edit");
+      } else {
+        const id = await createItem(parsed.data);
+        toast.success(mode === "duplicate" ? "Item duplicated" : "Item added");
+        onClose();
+        onSaved(id, mode);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not save item");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
     <>
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>New inventory item</DialogTitle>
+          <DialogTitle>{TITLE_BY_MODE[mode]}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
           <div className="space-y-1.5">
@@ -368,7 +464,7 @@ function ItemFormDialog({
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>SKU / part number</Label>
-              <Input value={form.sku} onChange={(e) => set("sku", e.target.value)} />
+              <Input value={form.sku} onChange={(e) => set("sku", e.target.value)} placeholder="Auto-generated if blank" />
             </div>
             <div className="space-y-1.5">
               <Label>Category</Label>
@@ -397,16 +493,23 @@ function ItemFormDialog({
               />
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1.5">
-                <Label>Qty</Label>
-                <Input type="number" value={form.quantity} onChange={(e) => set("quantity", e.target.value)} />
-              </div>
+              {!isEdit && (
+                <div className="space-y-1.5">
+                  <Label>Qty</Label>
+                  <Input type="number" value={form.quantity} onChange={(e) => set("quantity", e.target.value)} />
+                </div>
+              )}
               <div className="space-y-1.5">
                 <Label>Reorder at</Label>
                 <Input type="number" value={form.threshold} onChange={(e) => set("threshold", e.target.value)} />
               </div>
             </div>
           </div>
+          {isEdit && (
+            <p className="text-xs text-muted-foreground">
+              On hand: <span className="font-medium text-foreground tabular-nums">{form.quantity}</span>. Use Adjust stock to change quantity so the audit trail stays intact.
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>Unit cost</Label>
@@ -431,8 +534,8 @@ function ItemFormDialog({
           )}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={submit}>Add item</Button>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={submit} disabled={saving}>{saving ? "Saving..." : SUBMIT_BY_MODE[mode]}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

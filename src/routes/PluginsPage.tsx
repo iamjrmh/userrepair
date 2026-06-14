@@ -10,14 +10,10 @@ import { listPlugins, setPluginEnabled } from "@/lib/repos/plugins";
 const EVENT_HOOKS = ["onTicketCreate", "onTicketClose", "onInventoryChange", "onInvoicePaid"];
 
 const FUTURE_PLUGINS = [
-  "POS System",
   "Customer Portal",
   "SMS Notifications",
   "Email Notifications",
   "AI Repair Assistant",
-  "Barcode Scanner",
-  "Label Printer",
-  "Receipt Printer",
   "Device Check-In Kiosk",
 ];
 

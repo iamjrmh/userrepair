@@ -2,6 +2,7 @@ import { Search, Moon, Sun, Monitor, LogOut, User } from "lucide-react";
 import { useUiStore } from "@/stores/ui";
 import { useThemeStore } from "@/stores/theme";
 import { useAuthStore } from "@/stores/auth";
+import { SyncStatus } from "@/components/layout/SyncStatus";
 import { ROLE_LABEL } from "@/lib/roles";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -35,7 +36,8 @@ export function Topbar() {
         </kbd>
       </button>
 
-      <div className="ml-auto flex items-center gap-1">
+      <div className="ml-auto flex items-center gap-2">
+        <SyncStatus />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" aria-label="Theme">

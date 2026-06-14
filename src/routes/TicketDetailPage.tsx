@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Clock, Plus, Package, Trash2 } from "lucide-react";
+import { ArrowLeft, Clock, Plus, Package, Trash2, Lock } from "lucide-react";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import { Combobox } from "@/components/ui/combobox";
 import { RichTextEditor } from "@/components/shared/RichTextEditor";
 import { toast } from "@/components/ui/sonner";
 import { useAsync } from "@/hooks/useAsync";
+import { useTicketLock } from "@/hooks/useTicketLock";
 import {
   getTicket,
   listTimeline,
@@ -48,6 +49,10 @@ export default function TicketDetailPage() {
   const [noteBody, setNoteBody] = useState("");
   const [noteInternal, setNoteInternal] = useState(true);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmTakeover, setConfirmTakeover] = useState(false);
+
+  const editLock = useTicketLock(ticketId);
+  const readOnly = editLock.status === "readonly";
 
   const { data, loading, reload } = useAsync(async () => {
     const ticket = await getTicket(ticketId);
@@ -72,12 +77,14 @@ export default function TicketDetailPage() {
   const { ticket, timeline, notes, parts } = data;
 
   async function onStatusChange(to: string) {
+    if (readOnly) return;
     await changeStatus(ticketId, ticket.status, to as TicketStatus, ticket.technician_id);
     toast.success(`Status set to ${to}`);
     reload();
   }
 
   async function submitNote() {
+    if (readOnly) return;
     if (noteBody.trim() === "" || noteBody === "<p></p>") return;
     await addNote(ticketId, noteBody, noteInternal, ticket.technician_id);
     setNoteBody("");
@@ -94,17 +101,46 @@ export default function TicketDetailPage() {
         actions={
           <div className="flex items-center gap-2">
             <Badge variant={priorityVariant(ticket.priority)}>{ticket.priority}</Badge>
-            <Select value={ticket.status} onValueChange={onStatusChange}>
+            <Select value={ticket.status} onValueChange={onStatusChange} disabled={readOnly}>
               <SelectTrigger className="w-52"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {ALL_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
               </SelectContent>
             </Select>
-            <Button variant="destructive" size="icon" aria-label="Remove ticket" onClick={() => setConfirmDelete(true)}>
+            <Button variant="destructive" size="icon" aria-label="Remove ticket" disabled={readOnly} onClick={() => setConfirmDelete(true)}>
               <Trash2 />
             </Button>
           </div>
         }
+      />
+
+      {readOnly && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm">
+          <Lock className="h-4 w-4 shrink-0 text-warning" />
+          <span className="flex-1">
+            <span className="font-medium text-foreground">{editLock.lock?.holder_name ?? "Another user"}</span> is editing this ticket on another PC
+            {editLock.lock?.heartbeat_at ? <span className="text-muted-foreground"> (active {formatRelative(editLock.lock.heartbeat_at)})</span> : null}. You are viewing it read-only.
+          </span>
+          <Button variant="outline" size="sm" onClick={() => setConfirmTakeover(true)}>Take over editing</Button>
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={confirmTakeover}
+        onOpenChange={setConfirmTakeover}
+        title="Take over editing?"
+        description={`Any unsaved changes ${editLock.lock?.holder_name ?? "the other editor"} has open could be lost. Only take over if that PC was left open by mistake.`}
+        confirmLabel="Take over"
+        destructive
+        onConfirm={async () => {
+          try {
+            await editLock.takeOver();
+            toast.success("You can now edit this ticket");
+            reload();
+          } catch {
+            toast.error("Could not take over the lock");
+          }
+        }}
       />
       <ConfirmDialog
         open={confirmDelete}
@@ -138,10 +174,10 @@ export default function TicketDetailPage() {
               <RichTextEditor value={noteBody} onChange={setNoteBody} />
               <div className="flex items-center justify-between">
                 <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Switch checked={noteInternal} onCheckedChange={setNoteInternal} />
+                  <Switch checked={noteInternal} onCheckedChange={setNoteInternal} disabled={readOnly} />
                   {noteInternal ? "Internal note" : "Customer-facing"}
                 </label>
-                <Button size="sm" onClick={submitNote}><Plus /> Add note</Button>
+                <Button size="sm" onClick={submitNote} disabled={readOnly}><Plus /> Add note</Button>
               </div>
               <div className="space-y-2">
                 {notes.map((n) => (
@@ -157,9 +193,9 @@ export default function TicketDetailPage() {
             </CardContent>
           </Card>
 
-          <PartsCard ticketId={ticketId} parts={parts} technicianId={ticket.technician_id} onChanged={reload} />
+          <PartsCard ticketId={ticketId} parts={parts} technicianId={ticket.technician_id} onChanged={reload} disabled={readOnly} />
 
-          <LaborCard ticketId={ticketId} />
+          <LaborCard ticketId={ticketId} disabled={readOnly} />
         </div>
 
         <div className="space-y-4">
@@ -196,7 +232,7 @@ export default function TicketDetailPage() {
   );
 }
 
-function LaborCard({ ticketId }: { ticketId: number }) {
+function LaborCard({ ticketId, disabled }: { ticketId: number; disabled?: boolean }) {
   const { data, reload } = useAsync(async () => {
     const rate = await getSetting<number>("finance.labor_rate_cents", 6000);
     const lines = await listLabor(ticketId);
@@ -208,6 +244,7 @@ function LaborCard({ ticketId }: { ticketId: number }) {
   const total = lines.reduce((s, l) => s + Math.round(l.quantity * l.unit_price_cents), 0);
 
   async function add() {
+    if (disabled) return;
     const h = parseFloat(hours);
     if (!Number.isFinite(h) || h <= 0) {
       toast.error("Enter labor hours");
@@ -229,7 +266,7 @@ function LaborCard({ ticketId }: { ticketId: number }) {
             <Input type="number" step="0.1" value={hours} onChange={(e) => setHours(e.target.value)} className="w-24" />
           </div>
           <div className="text-sm text-muted-foreground">@ {formatCents(rate)}/hr = <span className="font-semibold text-foreground tabular-nums">{formatCents(Math.round((parseFloat(hours) || 0) * rate))}</span></div>
-          <Button size="sm" className="ml-auto" onClick={add}><Plus /> Add labor</Button>
+          <Button size="sm" className="ml-auto" onClick={add} disabled={disabled}><Plus /> Add labor</Button>
         </div>
         <div className="space-y-1.5">
           {lines.length === 0 ? (
@@ -240,7 +277,7 @@ function LaborCard({ ticketId }: { ticketId: number }) {
                 <span>{l.quantity} hr @ {formatCents(l.unit_price_cents)}/hr</span>
                 <span className="flex items-center gap-2">
                   <span className="tabular-nums">{formatCents(Math.round(l.quantity * l.unit_price_cents))}</span>
-                  <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={async () => { await deleteEstimateItem(l.id); reload(); }}>
+                  <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" disabled={disabled} onClick={async () => { await deleteEstimateItem(l.id); reload(); }}>
                     <Trash2 />
                   </Button>
                 </span>
@@ -273,11 +310,13 @@ function PartsCard({
   parts,
   technicianId,
   onChanged,
+  disabled,
 }: {
   ticketId: number;
   parts: { id: number; description: string; quantity: number; unit_cost_cents: number; item_id: number | null }[];
   technicianId: number | null;
   onChanged: () => void;
+  disabled?: boolean;
 }) {
   const { data: items } = useAsync(listItems, []);
   const [itemId, setItemId] = useState("none");
@@ -285,6 +324,7 @@ function PartsCard({
   const [qty, setQty] = useState("1");
 
   async function add() {
+    if (disabled) return;
     const selected = (items ?? []).find((i) => String(i.id) === itemId);
     const description = selected ? selected.description : desc.trim();
     if (description === "") {
@@ -330,7 +370,7 @@ function PartsCard({
             <Input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Tristar IC, U2 connector..." />
           </div>
         )}
-        <Button size="sm" onClick={add}><Plus /> Add part</Button>
+        <Button size="sm" onClick={add} disabled={disabled}><Plus /> Add part</Button>
         <div className="space-y-1.5">
           {parts.length === 0 ? (
             <p className="text-sm text-muted-foreground">No parts recorded.</p>

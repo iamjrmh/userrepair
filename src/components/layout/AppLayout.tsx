@@ -4,6 +4,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
 import { CommandPalette } from "@/components/layout/CommandPalette";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useSyncMonitor } from "@/hooks/useSyncMonitor";
 
 function RouteFallback() {
   return (
@@ -15,6 +16,7 @@ function RouteFallback() {
 }
 
 export function AppLayout() {
+  useSyncMonitor();
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
       <Sidebar />

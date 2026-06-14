@@ -102,6 +102,7 @@ export async function updateItem(id: number, input: InventoryItemInput): Promise
       id,
     ],
   );
+  await logActivity("inventory", id, "updated", `Edited part ${input.description}`);
 }
 
 export async function deleteItem(id: number): Promise<void> {
@@ -174,6 +175,14 @@ export async function lowStockItems(): Promise<InventoryItemRow[]> {
 export async function inventoryValueCents(): Promise<number> {
   const row = await getOne<{ total: number }>(
     "SELECT COALESCE(SUM(quantity * unit_cost_cents), 0) AS total FROM inventory_items WHERE deleted_at IS NULL",
+  );
+  return row?.total ?? 0;
+}
+
+// What every part in stock would bring in if it all sold at the listed sale price.
+export async function inventorySaleTotalCents(): Promise<number> {
+  const row = await getOne<{ total: number }>(
+    "SELECT COALESCE(SUM(quantity * sale_price_cents), 0) AS total FROM inventory_items WHERE deleted_at IS NULL",
   );
   return row?.total ?? 0;
 }

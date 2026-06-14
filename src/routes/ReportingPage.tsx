@@ -2,11 +2,11 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Toolti
 import { Download } from "lucide-react";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useAsync } from "@/hooks/useAsync";
 import { statusCounts } from "@/lib/repos/tickets";
 import { componentFailureStats } from "@/lib/repos/intelligence";
-import { inventoryValueCents, lowStockItems } from "@/lib/repos/inventory";
+import { inventoryValueCents, inventorySaleTotalCents, lowStockItems } from "@/lib/repos/inventory";
 import { formatCents } from "@/lib/format";
 
 function downloadCsv(filename: string, rows: Record<string, string | number>[]): void {
@@ -27,13 +27,14 @@ function downloadCsv(filename: string, rows: Record<string, string | number>[]):
 
 export default function ReportingPage() {
   const { data } = useAsync(async () => {
-    const [statuses, failures, invValue, low] = await Promise.all([
+    const [statuses, failures, invValue, invSaleTotal, low] = await Promise.all([
       statusCounts(),
       componentFailureStats(),
       inventoryValueCents(),
+      inventorySaleTotalCents(),
       lowStockItems(),
     ]);
-    return { statuses, failures, invValue, low };
+    return { statuses, failures, invValue, invSaleTotal, low };
   }, []);
 
   if (!data) return <div className="text-sm text-muted-foreground">Loading...</div>;
@@ -50,8 +51,9 @@ export default function ReportingPage() {
         }
       />
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Card><CardHeader><CardTitle>Inventory value</CardTitle></CardHeader><CardContent><div className="text-2xl font-semibold tabular-nums">{formatCents(data.invValue)}</div></CardContent></Card>
+      <div className="grid gap-4 lg:grid-cols-4">
+        <Card><CardHeader><CardTitle>Inventory value</CardTitle><CardDescription>Cost of parts in stock</CardDescription></CardHeader><CardContent><div className="text-2xl font-semibold tabular-nums">{formatCents(data.invValue)}</div></CardContent></Card>
+        <Card><CardHeader><CardTitle>Inventory sale total</CardTitle><CardDescription>If all stock sold at list price</CardDescription></CardHeader><CardContent><div className="text-2xl font-semibold tabular-nums">{formatCents(data.invSaleTotal)}</div><div className="mt-1 text-xs text-muted-foreground tabular-nums">{formatCents(data.invSaleTotal - data.invValue)} potential margin</div></CardContent></Card>
         <Card><CardHeader><CardTitle>Low-stock items</CardTitle></CardHeader><CardContent><div className="text-2xl font-semibold tabular-nums">{data.low.length}</div></CardContent></Card>
         <Card><CardHeader><CardTitle>Tracked faults</CardTitle></CardHeader><CardContent><div className="text-2xl font-semibold tabular-nums">{data.failures.reduce((s, f) => s + f.n, 0)}</div></CardContent></Card>
       </div>

@@ -93,5 +93,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("0014_rewards.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 15,
+            description: "ticket edit locks to prevent concurrent edits across PCs",
+            sql: include_str!("0015_ticket_locks.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
