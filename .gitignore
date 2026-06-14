@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+
+# Packaged installers + exe produced by build.bat
+Software/
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Editor / OS
+.DS_Store
+*.local
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# App data produced at runtime
+*.db
+*.db-shm
+*.db-wal
+
+# Internal docs kept local (only README.md is published)
+/RESEARCH.md
+/PLUGIN_API.md
+/github.md
+/userrepair.md

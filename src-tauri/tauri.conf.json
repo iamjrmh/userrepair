@@ -1,0 +1,74 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "userrepair",
+  "version": "0.1.0",
+  "identifier": "com.userrepair.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "userrepair",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1280,
+        "minHeight": 720,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "decorations": true,
+        "theme": "Dark"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' https://*.squarecdn.com https://*.squareup.com; frame-src 'self' https://*.squarecdn.com https://*.squareup.com; img-src 'self' asset: http://asset.localhost https://asset.localhost data: blob: https://*.squarecdn.com; style-src 'self' 'unsafe-inline' https://*.squarecdn.com; font-src 'self' data: https://*.squarecdn.com; connect-src 'self' ipc: http://ipc.localhost https://*.squarecdn.com https://*.squareup.com https://*.squareupsandbox.com; media-src 'self' asset: http://asset.localhost https://asset.localhost blob:",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/**", "$APPDATA/attachments/**"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["brd", "asc", "cad"],
+        "name": "Boardview File",
+        "description": "PCB boardview file opened by userrepair",
+        "role": "Viewer"
+      },
+      {
+        "ext": ["bin", "rom"],
+        "name": "Firmware Dump",
+        "description": "BIOS / EEPROM dump referenced by userrepair",
+        "role": "Viewer"
+      },
+      {
+        "ext": ["pdf"],
+        "name": "Schematic PDF",
+        "mimeType": "application/pdf",
+        "description": "Schematic or document referenced by userrepair",
+        "role": "Viewer"
+      },
+      {
+        "ext": ["zip"],
+        "name": "userrepair Backup",
+        "mimeType": "application/zip",
+        "description": "userrepair backup archive",
+        "role": "Editor"
+      }
+    ]
+  },
+  "plugins": {}
+}

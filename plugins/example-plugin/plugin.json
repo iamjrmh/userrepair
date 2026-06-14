@@ -1,0 +1,8 @@
+{
+  "name": "example-plugin",
+  "version": "1.0.0",
+  "author": "userrepair",
+  "entry": "index.js",
+  "permissions": ["events:onTicketClose", "ui:sidebar"],
+  "description": "Reference manifest demonstrating the plugin format. See PLUGIN_API.md."
+}

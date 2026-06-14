@@ -1,0 +1,45 @@
+[package]
+name = "userrepair"
+version = "0.1.0"
+description = "Board-level electronics repair shop management."
+authors = ["userrepair"]
+edition = "2021"
+rust-version = "1.77.2"
+
+# See https://v2.tauri.app/concept/architecture/ for the lib/bin split.
+[lib]
+name = "userrepair_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.2", features = [] }
+
+[dependencies]
+tauri = { version = "2.11.2", features = ["protocol-asset"] }
+tauri-plugin-sql = { version = "2.4.0", features = ["sqlite"] }
+tauri-plugin-fs = "2.5.1"
+tauri-plugin-dialog = "2.7.1"
+tauri-plugin-notification = "2.3.3"
+tauri-plugin-shell = "2.3.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zip = "2"
+sha2 = "0.10"
+walkdir = "2"
+# Used only by the db_tx command to run multi-table writes atomically on a
+# single connection (the plugin-sql pool cannot guarantee that). Shares the
+# bundled SQLite already pulled in by tauri-plugin-sql.
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
+# POS / Square integration: the one documented place the app talks to the
+# network (the "POS System" plugin's net capability). rustls avoids OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+uuid = { version = "1", features = ["v4"] }
+# Password hashing for employee accounts.
+argon2 = "0.5"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
