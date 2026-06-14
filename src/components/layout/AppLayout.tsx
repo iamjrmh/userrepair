@@ -20,10 +20,10 @@ function RouteFallback() {
 export function AppLayout() {
   useSyncMonitor();
 
-  // Check for an update once, when the app opens. No background polling: an
-  // update never appears mid-task, only a quiet dot on the top-bar button.
+  // Check for an update once, when the app opens, and pop the dialog open right
+  // away if one is available. No background polling: nothing appears mid-task.
   useEffect(() => {
-    void useUpdateStore.getState().check();
+    void useUpdateStore.getState().check(true);
   }, []);
 
   return (

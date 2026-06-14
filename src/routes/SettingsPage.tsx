@@ -1,4 +1,4 @@
-import { useState, useEffect, type ChangeEvent } from "react";
+import { useState, useEffect, useMemo, type ChangeEvent } from "react";
 import { Plus, Trash2, Save, Plug, Gift, Upload, Network, Copy, Printer, FolderOpen, Camera } from "lucide-react";
 import { open as openDirectory } from "@tauri-apps/plugin-dialog";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -38,7 +38,8 @@ import { useAuthStore } from "@/stores/auth";
 import { useBrandStore } from "@/stores/brand";
 import { fileToLogoDataUrl } from "@/lib/image";
 import { callCommand, getNetConfig, getLanIp, checkHost, clearNetConfig, DEFAULT_PORT } from "@/lib/net";
-import { printReceipt, sampleReceipt } from "@/lib/receipt";
+import { sampleReceipt } from "@/lib/receipt";
+import { ReceiptPreviewDialog } from "@/components/receipt/ReceiptPreviewDialog";
 import { ROLE_LABEL } from "@/lib/roles";
 import { formatBasisPoints, dollarsToCents } from "@/lib/format";
 import type { ThemeMode, TechRole } from "@/types";
@@ -133,7 +134,7 @@ function CameraSettings() {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><Camera className="h-4 w-4" /> Microscope captures</CardTitle>
-        <CardDescription>Where the Microsoldering tab saves photos and recordings. Captures stay local to each PC and are not synced; a technician can still upload any capture to a ticket.</CardDescription>
+        <CardDescription>Where the Microsoldering tab saves photos and recordings. On a multi-PC setup, captures from every PC are sent to this folder on the main PC, so set a path that exists on the main PC.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
         <Label>Capture output folder</Label>
@@ -163,6 +164,8 @@ function GeneralSettings() {
     setSaving(true);
     try {
       await setSetting("shop.name", get("shop.name"));
+      // Reflect the new name in the sidebar straight away.
+      useBrandStore.getState().setName(get("shop.name"));
       await setSetting("shop.address", get("shop.address"));
       await setSetting("shop.phone", get("shop.phone"));
       await setSetting("shop.email", get("shop.email"));
@@ -587,6 +590,8 @@ function ReceiptSettings() {
   const [width, setWidth] = useState<string | null>(null);
   const [footer, setFooter] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const sample = useMemo(() => sampleReceipt(), []);
 
   if (loading || !data) return <div className="text-sm text-muted-foreground">Loading...</div>;
   const settings = data;
@@ -604,22 +609,18 @@ function ReceiptSettings() {
     }
   }
 
-  async function testPrint() {
+  async function openPreview() {
     await save();
-    try {
-      await printReceipt(sampleReceipt());
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not open the print dialog");
-    }
+    setPreviewOpen(true);
   }
 
   return (
+    <>
     <Card className="max-w-2xl">
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><Printer className="h-4 w-4" /> Receipt printer</CardTitle>
         <CardDescription>
-          Receipts are generated locally and printed to any USB or thermal receipt printer installed in Windows.
-          The same print dialog can also &quot;Save as PDF&quot;.
+          Receipts are generated locally for any USB or thermal receipt printer. Preview the test receipt at your paper width, then print it or save it as a PNG or PDF.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -644,10 +645,17 @@ function ReceiptSettings() {
         </p>
         <div className="flex gap-2">
           <Button onClick={save} disabled={saving}><Save /> Save</Button>
-          <Button variant="outline" onClick={testPrint}><Printer /> Print test receipt</Button>
+          <Button variant="outline" onClick={openPreview}><Printer /> Print test receipt</Button>
         </div>
       </CardContent>
     </Card>
+    <ReceiptPreviewDialog
+      payload={sample}
+      open={previewOpen}
+      onClose={() => setPreviewOpen(false)}
+      initialWidth={Number(widthVal) === 58 ? 58 : 80}
+    />
+    </>
   );
 }
 

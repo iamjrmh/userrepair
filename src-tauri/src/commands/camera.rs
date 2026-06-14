@@ -28,16 +28,21 @@ fn safe_name(name: &str) -> String {
 }
 
 /// Write `data` to `<dir>/<file_name>`, creating the directory if needed.
-/// Returns the absolute path written, which the frontend can show or hand to the
-/// attachment store for a ticket upload.
-#[tauri::command]
-pub fn save_capture(dir: String, file_name: String, data: Vec<u8>) -> Result<String, String> {
+/// Returns the absolute path written. Shared by the local command and the host
+/// server (which writes client captures into the host's own output folder).
+pub(crate) fn write_capture(dir: &str, file_name: &str, data: &[u8]) -> Result<String, String> {
     if dir.trim().is_empty() {
         return Err("No capture folder is set. Ask a manager to set one in Settings.".into());
     }
-    let base = Path::new(&dir);
+    let base = Path::new(dir);
     std::fs::create_dir_all(base).map_err(|e| format!("create folder: {e}"))?;
-    let path = base.join(safe_name(&file_name));
-    std::fs::write(&path, &data).map_err(|e| format!("write file: {e}"))?;
+    let path = base.join(safe_name(file_name));
+    std::fs::write(&path, data).map_err(|e| format!("write file: {e}"))?;
     Ok(path.display().to_string())
+}
+
+/// Save a capture to a local folder (standalone / host mode).
+#[tauri::command]
+pub fn save_capture(dir: String, file_name: String, data: Vec<u8>) -> Result<String, String> {
+    write_capture(&dir, &file_name, &data)
 }

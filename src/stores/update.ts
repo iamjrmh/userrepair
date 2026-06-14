@@ -21,7 +21,8 @@ interface UpdateState {
   info: UpdateInfo | null;
   error: string | null;
   dialogOpen: boolean;
-  check: () => Promise<void>;
+  /** Check for an update; pass surface=true to auto-open the dialog if one is found. */
+  check: (surface?: boolean) => Promise<void>;
   openDialog: () => void;
   closeDialog: () => void;
   install: () => Promise<void>;
@@ -34,12 +35,17 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   error: null,
   dialogOpen: false,
 
-  check: async () => {
+  check: async (surface) => {
     if (get().checking) return;
     set({ checking: true, error: null });
     try {
       const info = await checkForUpdate();
-      set({ info, checking: false });
+      set((s) => ({
+        info,
+        checking: false,
+        // On launch, pop the dialog open the moment an update is found.
+        dialogOpen: surface && info.available ? true : s.dialogOpen,
+      }));
     } catch (e) {
       // Stay silent on the badge; the error only surfaces inside the dialog.
       set({ checking: false, error: errorMessage(e, "Update check failed") });

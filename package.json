@@ -1,7 +1,7 @@
 {
   "name": "userrepair",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.2.1",
   "type": "module",
   "description": "Board-level electronics repair shop management - Tauri 2 + React + TypeScript.",
   "scripts": {
@@ -47,7 +47,9 @@
     "clsx": "2.1.1",
     "cmdk": "1.1.1",
     "date-fns": "4.4.0",
+    "html2canvas": "^1.4.1",
     "jsbarcode": "3.12.3",
+    "jspdf": "^4.2.1",
     "lucide-react": "1.18.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",

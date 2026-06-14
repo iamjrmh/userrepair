@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useUpdateStore } from "@/stores/update";
+import { renderMarkdown } from "@/lib/markdown";
 
 /**
  * The update dialog, opened from the top-bar button. Shows the current vs latest
@@ -29,7 +30,7 @@ export function UpdateDialog() {
 
   return (
     <Dialog open={dialogOpen} onOpenChange={(o) => { if (!o && !installing) closeDialog(); }}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>Software update</DialogTitle>
           <DialogDescription>
@@ -56,8 +57,8 @@ export function UpdateDialog() {
               <Download className="h-4 w-4 text-primary" /> Version {info.latest} is available.
             </div>
             {info.notes && (
-              <div className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-                {info.notes}
+              <div className="max-h-72 overflow-y-auto rounded-md border border-border bg-card p-3">
+                {renderMarkdown(info.notes)}
               </div>
             )}
             {installing && (

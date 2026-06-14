@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Cpu, Plus, ExternalLink, Star, Trash2, Microscope } from "lucide-react";
+import { Cpu, Plus, FileText, Star, Trash2, Microscope } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -30,6 +30,9 @@ import {
   addComponent,
   listNets,
   addNet,
+  listBoardAttachments,
+  addBoardAttachment,
+  deleteBoardAttachment,
 } from "@/lib/repos/boards";
 import {
   listMeasurements,
@@ -60,24 +63,11 @@ export default function BoardToolsPage() {
     [selected],
   );
 
-  async function openBoardview() {
-    const file = await openDialog({
-      multiple: false,
-      directory: false,
-      filters: [{ name: "Boardview / schematic", extensions: ["brd", "asc", "cad", "pdf"] }],
-    });
-    if (file && !Array.isArray(file)) {
-      // No in-app boardview viewer: delegate to the OS default app (documented).
-      await invoke("open_external", { path: file });
-    }
-  }
-
   return (
     <div className="space-y-6">
       <PageHeader
         title="Board Tools"
-        description="Board-level measurements, known-good values, and test-point / net / component indices per board revision."
-        actions={<Button variant="outline" onClick={openBoardview}><ExternalLink /> Open boardview file</Button>}
+        description="Board-level measurements, known-good values, boardview files, and test-point / net / component indices per board revision."
       />
 
       <Card>
@@ -100,6 +90,8 @@ export default function BoardToolsPage() {
       {selected === null ? (
         <EmptyState icon={Cpu} title="Select a board revision" description="Pick or create a board revision to log measurements and manage its reference indices." />
       ) : (
+        <>
+        <BoardviewBar boardId={selected} />
         <Tabs defaultValue="measurements">
           <TabsList>
             <TabsTrigger value="measurements">Measurements</TabsTrigger>
@@ -119,6 +111,55 @@ export default function BoardToolsPage() {
           <TabsContent value="nets"><Nets boardId={selected} /></TabsContent>
           <TabsContent value="components"><Components boardId={selected} /></TabsContent>
         </Tabs>
+        </>
+      )}
+    </div>
+  );
+}
+
+function BoardviewBar({ boardId }: { boardId: number }) {
+  const { data, reload } = useAsync(() => listBoardAttachments(boardId), [boardId]);
+  const views = data ?? [];
+
+  async function attach() {
+    const file = await openDialog({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "Boardview / schematic", extensions: ["brd", "bdv", "bvr", "bv", "fz", "cad", "asc", "tvw", "f2b", "gr", "pdf"] }],
+    });
+    if (!file || Array.isArray(file)) return;
+    const name = file.split(/[\\/]/).pop() ?? "boardview";
+    try {
+      await addBoardAttachment(boardId, file, name, "boardview");
+      toast.success("Boardview attached");
+      reload();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not attach boardview");
+    }
+  }
+
+  async function open(rel: string) {
+    const base = await invoke<string>("app_data_dir");
+    const sep = base.endsWith("\\") || base.endsWith("/") ? "" : "\\";
+    await invoke("open_external", { path: `${base}${sep}${rel}`.replace(/\//g, "\\") });
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
+      <span className="flex items-center gap-1.5 text-sm font-medium"><FileText className="h-4 w-4" /> Boardview</span>
+      {views.map((a) => (
+        <span key={a.id} className="flex items-center">
+          <Button variant="outline" size="sm" onClick={() => void open(a.relative_path)} title={a.original_name}>
+            Open {views.length > 1 ? a.original_name : "boardview"}
+          </Button>
+          <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={async () => { await deleteBoardAttachment(a.id); reload(); }} aria-label="Remove boardview">
+            <Trash2 />
+          </Button>
+        </span>
+      ))}
+      <Button variant="ghost" size="sm" onClick={attach}><Plus /> Attach boardview</Button>
+      {views.length === 0 && (
+        <span className="text-xs text-muted-foreground">Opens in your boardview viewer. Attach a file you are licensed to use (ZXW / WuXinJi export, JCID, or your own).</span>
       )}
     </div>
   );

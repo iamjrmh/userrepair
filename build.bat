@@ -29,8 +29,8 @@ GOTO :end
     )
 
     ECHO [userrepair] Bumping version !CUR_VER! -^> !NEW_VER! ...
-    powershell -NoProfile -Command "$v='!NEW_VER!'; $q=[char]34; foreach($f in @('%SCRIPT_DIR%package.json','%SCRIPT_DIR%src-tauri\tauri.conf.json')){ $c=Get-Content $f -Raw; $c=[regex]::new($q+'version'+$q+':\s*'+$q+'[^'+$q+']*'+$q).Replace($c, $q+'version'+$q+': '+$q+$v+$q, 1); [IO.File]::WriteAllText($f,$c) }; $cf='%SCRIPT_DIR%src-tauri\Cargo.toml'; $c=Get-Content $cf -Raw; $c=[regex]::new('(?m)^version\s*=\s*'+$q+'[^'+$q+']*'+$q).Replace($c,'version = '+$q+$v+$q,1); [IO.File]::WriteAllText($cf,$c)" || goto :error
-    ECHO [userrepair] Updated package.json, tauri.conf.json, and Cargo.toml to !NEW_VER!.
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%bump-version.ps1" -Version "!NEW_VER!" || goto :error
+    ECHO [userrepair] Updated package.json, tauri.conf.json, Cargo.toml, and Cargo.lock to !NEW_VER!.
     EXIT /B 0
 
 :main

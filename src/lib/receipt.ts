@@ -36,7 +36,7 @@ export interface ReceiptPayload {
   customerName?: string | null;
 }
 
-interface ShopInfo {
+export interface ShopInfo {
   name: string;
   address: string;
   phone: string;
@@ -59,7 +59,8 @@ export async function getReceiptWidth(): Promise<ReceiptWidth> {
   return w === 58 ? 58 : 80;
 }
 
-async function loadShopInfo(): Promise<ShopInfo> {
+/** Load shop info for a receipt, optionally forcing a paper width for preview. */
+export async function loadShopInfo(widthOverride?: ReceiptWidth): Promise<ShopInfo> {
   const [name, address, phone, email, footer, width] = await Promise.all([
     getSetting<string>("shop.name", ""),
     getSetting<string>("shop.address", ""),
@@ -75,7 +76,7 @@ async function loadShopInfo(): Promise<ShopInfo> {
     email,
     logo: useBrandStore.getState().logo,
     footer,
-    width,
+    width: widthOverride ?? width,
   };
 }
 
@@ -238,12 +239,15 @@ export function buildReceiptHtml(payload: ReceiptPayload, shop: ShopInfo): strin
 
 /**
  * Print a receipt to the default / chosen printer via a hidden iframe. The user
- * picks their thermal printer (or "Save as PDF") in the print dialog.
+ * picks their thermal printer in the print dialog.
  */
-export async function printReceipt(payload: ReceiptPayload): Promise<void> {
-  const shop = await loadShopInfo();
-  const html = buildReceiptHtml(payload, shop);
+export async function printReceipt(payload: ReceiptPayload, widthOverride?: ReceiptWidth): Promise<void> {
+  const shop = await loadShopInfo(widthOverride);
+  await printReceiptHtml(buildReceiptHtml(payload, shop));
+}
 
+/** Print a pre-built receipt HTML document through a hidden iframe. */
+export async function printReceiptHtml(html: string): Promise<void> {
   const iframe = document.createElement("iframe");
   iframe.setAttribute("aria-hidden", "true");
   iframe.style.position = "fixed";

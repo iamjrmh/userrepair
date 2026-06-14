@@ -20,6 +20,7 @@ import { getSetting } from "@/lib/repos/settings";
 import { saveCapture } from "@/lib/camera";
 import { attachFileToTicket } from "@/lib/repos/attachments";
 import { listTickets } from "@/lib/repos/tickets";
+import { isClient, hostSaveCapture, hostAttachToTicket } from "@/lib/net";
 
 interface Capture {
   id: string;
@@ -27,6 +28,7 @@ interface Capture {
   url: string;
   path: string;
   fileName: string;
+  blob: Blob;
 }
 
 const LS_DEVICE = "camera.device";
@@ -73,13 +75,17 @@ export default function MicrosolderingPage() {
   async function persist(blob: Blob, fileName: string, kind: "photo" | "video") {
     try {
       const bytes = new Uint8Array(await blob.arrayBuffer());
-      const path = await saveCapture(outputDir, fileName, bytes);
+      // On a client, send the capture to the host so it lands in the manager's
+      // folder on the main PC; otherwise write to this machine's folder.
+      const path = isClient()
+        ? await hostSaveCapture(fileName, bytes)
+        : await saveCapture(outputDir, fileName, bytes);
       const url = URL.createObjectURL(blob);
       setCaptures((c) => [
-        { id: `${Date.now()}-${Math.round(Math.random() * 1e6)}`, kind, url, path, fileName },
+        { id: `${Date.now()}-${Math.round(Math.random() * 1e6)}`, kind, url, path, fileName, blob },
         ...c,
       ]);
-      toast.success(`Saved ${fileName}`);
+      toast.success(isClient() ? `Saved to the main PC: ${fileName}` : `Saved ${fileName}`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not save capture");
     }
@@ -290,12 +296,14 @@ function UploadToTicketDialog({ capture, onClose }: { capture: Capture; onClose:
     if (!ticketId) { toast.error("Pick a ticket"); return; }
     setBusy(true);
     try {
-      await attachFileToTicket(
-        Number(ticketId),
-        capture.path,
-        capture.fileName,
-        capture.kind === "photo" ? "during" : "file",
-      );
+      const category = capture.kind === "photo" ? "during" : "file";
+      if (isClient()) {
+        // Send the bytes to the host so the file lives where the shared row points.
+        const bytes = new Uint8Array(await capture.blob.arrayBuffer());
+        await hostAttachToTicket(Number(ticketId), capture.fileName, category, bytes);
+      } else {
+        await attachFileToTicket(Number(ticketId), capture.path, capture.fileName, category);
+      }
       toast.success("Uploaded to ticket");
       onClose();
     } catch (e) {

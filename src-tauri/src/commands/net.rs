@@ -37,6 +37,34 @@ pub async fn net_post(
         .map_err(|e| format!("Bad response from host: {e}"))
 }
 
+/// POST raw bytes to `{host}{path}` on the host machine. Used to send camera
+/// captures and ticket attachments to the host for central storage. The file
+/// name and any ids ride in the path's query string. Returns the parsed JSON.
+#[tauri::command]
+pub async fn net_post_bytes(
+    host: String,
+    key: String,
+    path: String,
+    data: Vec<u8>,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}{}", host.trim_end_matches('/'), path);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut req = client.post(&url).body(data);
+    if !key.is_empty() {
+        req = req.header("x-ur-key", key);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach the host PC at {host}: {e}"))?;
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Bad response from host: {e}"))
+}
+
 /// Probe a host's `/health` endpoint so the setup screen can confirm a client
 /// can reach the host before saving the configuration.
 #[tauri::command]

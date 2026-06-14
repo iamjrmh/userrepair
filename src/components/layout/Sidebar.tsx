@@ -20,6 +20,7 @@ export function Sidebar() {
   const toggleGroup = useUiStore((s) => s.toggleGroup);
   const role = useAuthStore((s) => s.user?.role);
   const logo = useBrandStore((s) => s.logo);
+  const shopName = useBrandStore((s) => s.name);
 
   const allowed = NAV_ITEMS.filter((i) => !role || hasAccess(role, i.path));
   const groups = NAV_GROUP_ORDER.map((group) => ({
@@ -35,10 +36,10 @@ export function Sidebar() {
       )}
     >
       <div className={cn("flex h-14 items-center gap-2 border-b border-border", collapsed ? "justify-center px-0" : "px-3")}>
-        <img src={logo} alt="userrepair" className="h-9 w-9 shrink-0 rounded-md" />
+        <img src={logo} alt={shopName} className="h-9 w-9 shrink-0 rounded-md" />
         {!collapsed && (
           <div className="min-w-0">
-            <div className="truncate font-semibold leading-tight">userrepair</div>
+            <div className="truncate font-semibold leading-tight">{shopName}</div>
             <div className="truncate text-xs text-muted-foreground">Bench management</div>
           </div>
         )}

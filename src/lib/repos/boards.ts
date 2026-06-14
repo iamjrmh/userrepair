@@ -1,5 +1,54 @@
+import { invoke } from "@tauri-apps/api/core";
 import { getOne, run, select, softDelete } from "@/lib/db";
 import type { BoardRevision } from "@/types";
+
+// --- boardview / schematic attachments per revision --------------------------
+
+export interface BoardAttachment {
+  id: number;
+  board_revision_id: number;
+  original_name: string;
+  relative_path: string;
+  kind: string;
+  size_bytes: number;
+}
+
+interface StoredAttachment {
+  relative_path: string;
+  sha256: string;
+  size: number;
+}
+
+export async function listBoardAttachments(boardId: number): Promise<BoardAttachment[]> {
+  return select<BoardAttachment>(
+    `SELECT id, board_revision_id, original_name, relative_path, kind, size_bytes
+     FROM board_attachments WHERE board_revision_id = ?1 AND deleted_at IS NULL
+     ORDER BY created_at DESC`,
+    [boardId],
+  );
+}
+
+/** Copy a local boardview / schematic file into the store and link it to a board revision. */
+export async function addBoardAttachment(
+  boardId: number,
+  sourcePath: string,
+  originalName: string,
+  kind = "boardview",
+): Promise<void> {
+  const stored = await invoke<StoredAttachment>("attachment_store", {
+    sourcePath,
+    subdir: "boards",
+  });
+  await run(
+    `INSERT INTO board_attachments (board_revision_id, original_name, relative_path, kind, sha256, size_bytes)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+    [boardId, originalName, stored.relative_path, kind, stored.sha256, stored.size],
+  );
+}
+
+export async function deleteBoardAttachment(id: number): Promise<void> {
+  await softDelete("board_attachments", id);
+}
 
 export async function listBoardRevisions(): Promise<BoardRevision[]> {
   return select<BoardRevision>(

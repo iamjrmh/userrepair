@@ -1,6 +1,6 @@
 [package]
 name = "userrepair"
-version = "1.0.0"
+version = "1.2.1"
 description = "Board-level electronics repair shop management."
 authors = ["userrepair"]
 edition = "2021"
@@ -42,9 +42,15 @@ argon2 = "0.5"
 axum = "0.7"
 tokio = { version = "1", features = ["net", "rt-multi-thread"] }
 
+# Tuned for fast builds that use the whole machine. Fat LTO + a single codegen
+# unit (the old settings) serialized the build for a small runtime win that does
+# not matter for a webview shell. Many codegen units compile in parallel across
+# all cores, no LTO drops the slow whole-program link, and incremental makes
+# repeat builds much faster.
 [profile.release]
 panic = "abort"
-codegen-units = 1
-lto = true
+codegen-units = 256
+lto = false
+incremental = true
 opt-level = "s"
 strip = true

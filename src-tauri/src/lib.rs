@@ -51,6 +51,7 @@ pub fn run() {
             commands::system::open_external,
             commands::system::app_data_dir,
             commands::net::net_post,
+            commands::net::net_post_bytes,
             commands::net::net_health,
             commands::net::start_host_server,
             commands::net::host_lan_ip,

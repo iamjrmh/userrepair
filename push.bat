@@ -37,6 +37,9 @@ GOTO :end
     REM committed before .gitignore covered it. (.gitignore already excludes it.)
     git rm -r --cached --ignore-unmatch Software >NUL 2>&1
 
+    REM Keep the ignore file itself out of the published repo.
+    git rm --cached --ignore-unmatch .gitignore >NUL 2>&1
+
     REM Stage only the required files. .gitignore excludes node_modules, build
     REM output, the local database, and the internal docs, so just add everything.
     ECHO [push] Staging files...

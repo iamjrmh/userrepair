@@ -16,16 +16,19 @@
 //! Errors come back as { "error": "<message>" } with HTTP 200 so the client can
 //! surface a readable message regardless of transport.
 
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use axum::{
-    extract::State,
+    body::Bytes,
+    extract::{DefaultBodyLimit, Query, State},
     http::HeaderMap,
     routing::{get, post},
     Json, Router,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Column, Row, SqlitePool, TypeInfo, ValueRef};
 use tauri::{AppHandle, Manager};
@@ -73,6 +76,10 @@ pub async fn run_server(app: AppHandle, port: u16, key: String) -> Result<(), St
         .route("/db/execute", post(db_execute))
         .route("/db/tx", post(db_tx))
         .route("/cmd", post(cmd))
+        .route("/capture", post(capture))
+        .route("/attach", post(attach))
+        // Captures and recordings can be large; lift axum's small default limit.
+        .layer(DefaultBodyLimit::max(512 * 1024 * 1024))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
@@ -234,6 +241,92 @@ async fn cmd(
 
 fn to_value<T: serde::Serialize>(v: T) -> Result<Value, String> {
     serde_json::to_value(v).map_err(|e| e.to_string())
+}
+
+/// Receive a camera capture from a client and write it into the host's own
+/// configured capture folder, so all PCs' media collects on the main PC.
+async fn capture(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+    Query(q): Query<HashMap<String, String>>,
+    body: Bytes,
+) -> Json<Value> {
+    if !authed(&headers, &state) {
+        return unauthorized();
+    }
+    let name = q.get("name").cloned().unwrap_or_default();
+    let dir = setting(&state.pool, "camera.output_dir").await;
+    match crate::commands::camera::write_capture(&dir, &name, &body) {
+        Ok(path) => Json(json!({ "ok": true, "path": path })),
+        Err(e) => Json(json!({ "error": e })),
+    }
+}
+
+/// Receive a capture from a client and attach it to a ticket: the file is stored
+/// in the host's attachment store (where the shared database expects it) and the
+/// ticket_attachments row is inserted on the host.
+async fn attach(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+    Query(q): Query<HashMap<String, String>>,
+    body: Bytes,
+) -> Json<Value> {
+    if !authed(&headers, &state) {
+        return unauthorized();
+    }
+    let ticket_id: i64 = q.get("ticketId").and_then(|s| s.parse().ok()).unwrap_or(0);
+    if ticket_id == 0 {
+        return Json(json!({ "error": "missing ticketId" }));
+    }
+    let name = q.get("name").cloned().unwrap_or_else(|| "capture".to_string());
+    let category = q.get("category").cloned().unwrap_or_else(|| "general".to_string());
+    match store_attachment(&state, ticket_id, &name, &category, &body).await {
+        Ok(id) => Json(json!({ "ok": true, "id": id })),
+        Err(e) => Json(json!({ "error": e })),
+    }
+}
+
+/// Hash, store (content-deduped), and link an attachment to a ticket on the host.
+async fn store_attachment(
+    state: &ServerState,
+    ticket_id: i64,
+    name: &str,
+    category: &str,
+    data: &[u8],
+) -> Result<i64, String> {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let hash = format!("{:x}", hasher.finalize());
+    let ext = std::path::Path::new(name)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("bin")
+        .to_lowercase();
+
+    let base = state.app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dir = base.join("attachments").join("tickets");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir failed: {e}"))?;
+    let file_name = format!("{hash}.{ext}");
+    let dest = dir.join(&file_name);
+    if !dest.exists() {
+        std::fs::write(&dest, data).map_err(|e| format!("write failed: {e}"))?;
+    }
+
+    let rel = format!("attachments/tickets/{file_name}");
+    let res = sqlx::query(
+        "INSERT INTO ticket_attachments (ticket_id, category, original_name, relative_path, sha256, size_bytes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )
+    .bind(ticket_id)
+    .bind(category)
+    .bind(name)
+    .bind(&rel)
+    .bind(&hash)
+    .bind(data.len() as i64)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(res.last_insert_rowid())
 }
 
 // --- Query execution helpers -------------------------------------------------

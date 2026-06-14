@@ -95,6 +95,42 @@ export async function hostPost(path: string, body: unknown): Promise<HostRespons
   return res;
 }
 
+/**
+ * Send a camera capture to the host PC, which writes it into its own configured
+ * capture folder. Client mode only. Returns the path the host saved it to.
+ */
+export async function hostSaveCapture(fileName: string, data: Uint8Array): Promise<string> {
+  const cfg = getNetConfig();
+  const res = await invoke<HostResponse>("net_post_bytes", {
+    host: cfg.host,
+    key: cfg.key,
+    path: `/capture?name=${encodeURIComponent(fileName)}`,
+    data,
+  });
+  if (res && typeof res.error === "string") throw new Error(res.error);
+  return typeof res.path === "string" ? res.path : "";
+}
+
+/**
+ * Upload a capture to the host and attach it to a ticket there, so the file
+ * lives in the host's store where the shared database row points. Client mode.
+ */
+export async function hostAttachToTicket(
+  ticketId: number,
+  fileName: string,
+  category: string,
+  data: Uint8Array,
+): Promise<void> {
+  const cfg = getNetConfig();
+  const res = await invoke<HostResponse>("net_post_bytes", {
+    host: cfg.host,
+    key: cfg.key,
+    path: `/attach?ticketId=${ticketId}&name=${encodeURIComponent(fileName)}&category=${encodeURIComponent(category)}`,
+    data,
+  });
+  if (res && typeof res.error === "string") throw new Error(res.error);
+}
+
 /** Health probe for a candidate host (used by the setup/Settings screens). */
 export async function checkHost(
   host: string,
