@@ -1,18 +1,29 @@
 import { useState } from "react";
-import { Cpu, Plus, ExternalLink } from "lucide-react";
+import { Cpu, Plus, ExternalLink, Star, Trash2, Microscope } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { EmptyState } from "@/components/shared/EmptyState";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
 import { Combobox } from "@/components/ui/combobox";
+import { toast } from "@/components/ui/sonner";
 import { useAsync } from "@/hooks/useAsync";
 import {
   listBoardRevisions,
+  createBoardRevision,
   listTestPoints,
   addTestPoint,
   listComponents,
@@ -20,11 +31,34 @@ import {
   listNets,
   addNet,
 } from "@/lib/repos/boards";
+import {
+  listMeasurements,
+  createMeasurement,
+  markKnownGood,
+  deleteMeasurement,
+  type MeasurementRow,
+} from "@/lib/repos/measurements";
+import type { MeasurementKind } from "@/types";
+
+const KINDS: { value: MeasurementKind; label: string }[] = [
+  { value: "voltage", label: "Voltage" },
+  { value: "resistance", label: "Resistance" },
+  { value: "diode", label: "Diode mode" },
+  { value: "thermal", label: "Thermal" },
+  { value: "scope", label: "Oscilloscope" },
+  { value: "injection", label: "Injection" },
+  { value: "microscope", label: "Microscope" },
+];
 
 export default function BoardToolsPage() {
-  const { data: boards } = useAsync(listBoardRevisions, []);
+  const { data: boards, reload: reloadBoards } = useAsync(listBoardRevisions, []);
   const [boardId, setBoardId] = useState("none");
   const selected = boardId === "none" ? null : Number(boardId);
+
+  const { data: measurements, reload: reloadMeasurements } = useAsync(
+    () => (selected === null ? Promise.resolve([]) : listMeasurements({ boardId: selected })),
+    [selected],
+  );
 
   async function openBoardview() {
     const file = await openDialog({
@@ -42,13 +76,13 @@ export default function BoardToolsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Board Tools"
-        description="Test-point, net, and component indices per board revision."
+        description="Board-level measurements, known-good values, and test-point / net / component indices per board revision."
         actions={<Button variant="outline" onClick={openBoardview}><ExternalLink /> Open boardview file</Button>}
       />
 
       <Card>
         <CardHeader><CardTitle>Board revision</CardTitle></CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-wrap items-end gap-3">
           <div className="w-80 space-y-1.5">
             <Label>Active board revision</Label>
             <Combobox
@@ -59,24 +93,194 @@ export default function BoardToolsPage() {
               searchPlaceholder="Search boards / devices..."
             />
           </div>
-          <p className="mt-2 text-xs text-muted-foreground">Create board revisions from the Microsoldering module.</p>
+          <NewBoardButton onCreated={reloadBoards} />
         </CardContent>
       </Card>
 
       {selected === null ? (
-        <EmptyState icon={Cpu} title="Select a board revision" description="Choose a board to manage its reference indices." />
+        <EmptyState icon={Cpu} title="Select a board revision" description="Pick or create a board revision to log measurements and manage its reference indices." />
       ) : (
-        <Tabs defaultValue="testpoints">
+        <Tabs defaultValue="measurements">
           <TabsList>
+            <TabsTrigger value="measurements">Measurements</TabsTrigger>
+            <TabsTrigger value="known">Known good</TabsTrigger>
             <TabsTrigger value="testpoints">Test points</TabsTrigger>
             <TabsTrigger value="nets">Nets</TabsTrigger>
             <TabsTrigger value="components">Components</TabsTrigger>
           </TabsList>
+          <TabsContent value="measurements" className="space-y-4">
+            <MeasurementForm boardId={selected} onSaved={reloadMeasurements} />
+            <MeasurementList rows={measurements ?? []} onChanged={reloadMeasurements} />
+          </TabsContent>
+          <TabsContent value="known">
+            <MeasurementList rows={(measurements ?? []).filter((m) => m.is_known_good === 1)} onChanged={reloadMeasurements} knownGoodView />
+          </TabsContent>
           <TabsContent value="testpoints"><TestPoints boardId={selected} /></TabsContent>
           <TabsContent value="nets"><Nets boardId={selected} /></TabsContent>
           <TabsContent value="components"><Components boardId={selected} /></TabsContent>
         </Tabs>
       )}
+    </div>
+  );
+}
+
+function NewBoardButton({ onCreated }: { onCreated: () => void }) {
+  const [model, setModel] = useState("");
+  const [rev, setRev] = useState("");
+
+  async function create() {
+    if (model.trim() === "" || rev.trim() === "") {
+      toast.error("Model and revision required");
+      return;
+    }
+    await createBoardRevision({ device_model: model, revision: rev, layer_count: null, primary_soc: null, pmic: null, notes: null });
+    setModel("");
+    setRev("");
+    toast.success("Board revision created");
+    onCreated();
+  }
+
+  return (
+    <div className="flex items-end gap-2">
+      <div className="space-y-1.5"><Label>New model</Label><Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="MacBook Pro 2019" className="w-44" /></div>
+      <div className="space-y-1.5"><Label>Revision</Label><Input value={rev} onChange={(e) => setRev(e.target.value)} placeholder="820-01700" className="w-36" /></div>
+      <Button variant="outline" onClick={create}><Plus /> Add</Button>
+    </div>
+  );
+}
+
+function MeasurementForm({ boardId, onSaved }: { boardId: number; onSaved: () => void }) {
+  const [kind, setKind] = useState<MeasurementKind>("voltage");
+  const [form, setForm] = useState({
+    test_point: "",
+    reference_designator: "",
+    rail_name: "",
+    power_state: "on",
+    expected_value: "",
+    measured_value: "",
+    units: "V",
+    notes: "",
+  });
+  function set<K extends keyof typeof form>(k: K, v: string) { setForm((f) => ({ ...f, [k]: v })); }
+
+  async function submit() {
+    await createMeasurement({
+      ticket_id: null,
+      board_revision_id: boardId,
+      technician_id: null,
+      kind,
+      test_point: form.test_point || null,
+      reference_designator: form.reference_designator || null,
+      rail_name: form.rail_name || null,
+      power_state: form.power_state || null,
+      expected_value: form.expected_value || null,
+      measured_value: form.measured_value || null,
+      units: form.units || null,
+      measurement_mode: null,
+      orientation: null,
+      signal_type: null,
+      frequency: null,
+      result: null,
+      notes: form.notes || null,
+    });
+    setForm({ ...form, test_point: "", reference_designator: "", expected_value: "", measured_value: "", notes: "" });
+    toast.success("Measurement logged");
+    onSaved();
+  }
+
+  return (
+    <Card>
+      <CardHeader><CardTitle>Log measurement</CardTitle></CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div className="space-y-1.5">
+            <Label>Type</Label>
+            <Select value={kind} onValueChange={(v) => setKind(v as MeasurementKind)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>{KINDS.map((k) => <SelectItem key={k.value} value={k.value}>{k.label}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5"><Label>Test point</Label><Input value={form.test_point} onChange={(e) => set("test_point", e.target.value)} /></div>
+          <div className="space-y-1.5"><Label>Reference</Label><Input value={form.reference_designator} onChange={(e) => set("reference_designator", e.target.value)} placeholder="U2 / C12" /></div>
+          <div className="space-y-1.5"><Label>Rail / signal</Label><Input value={form.rail_name} onChange={(e) => set("rail_name", e.target.value)} placeholder="PP3V3_SUS" /></div>
+        </div>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div className="space-y-1.5"><Label>Expected</Label><Input value={form.expected_value} onChange={(e) => set("expected_value", e.target.value)} /></div>
+          <div className="space-y-1.5"><Label>Measured</Label><Input value={form.measured_value} onChange={(e) => set("measured_value", e.target.value)} /></div>
+          <div className="space-y-1.5"><Label>Units</Label><Input value={form.units} onChange={(e) => set("units", e.target.value)} /></div>
+          <div className="space-y-1.5">
+            <Label>Power state</Label>
+            <Select value={form.power_state} onValueChange={(v) => set("power_state", v)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="off">Off</SelectItem>
+                <SelectItem value="standby">Standby</SelectItem>
+                <SelectItem value="on">On</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <div className="space-y-1.5"><Label>Notes</Label><Input value={form.notes} onChange={(e) => set("notes", e.target.value)} /></div>
+        <Button onClick={submit}><Plus /> Log measurement</Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function MeasurementList({ rows, onChanged, knownGoodView }: { rows: MeasurementRow[]; onChanged: () => void; knownGoodView?: boolean }) {
+  const [pendingDelete, setPendingDelete] = useState<number | null>(null);
+  if (rows.length === 0) {
+    return <EmptyState icon={Microscope} title={knownGoodView ? "No known-good values" : "No measurements"} description={knownGoodView ? "Star a measurement to add it to the reference set." : "Log your first measurement above."} />;
+  }
+  return (
+    <div className="overflow-hidden rounded-lg border border-border">
+      <table className="w-full text-sm">
+        <thead className="bg-card text-muted-foreground">
+          <tr className="border-b border-border">
+            <th className="px-3 py-2 text-left">Type</th>
+            <th className="px-3 py-2 text-left">Point / Ref</th>
+            <th className="px-3 py-2 text-left">Rail</th>
+            <th className="px-3 py-2 text-left">Expected</th>
+            <th className="px-3 py-2 text-left">Measured</th>
+            <th className="px-3 py-2 text-left">State</th>
+            <th className="px-3 py-2"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((m) => (
+            <tr key={m.id} className="border-b border-border/60">
+              <td className="px-3 py-2"><Badge variant="secondary">{m.kind}</Badge></td>
+              <td className="px-3 py-2 font-mono text-xs">{m.test_point ?? m.reference_designator ?? "-"}</td>
+              <td className="px-3 py-2">{m.rail_name ?? "-"}</td>
+              <td className="px-3 py-2 tabular-nums">{m.expected_value ?? "-"} {m.units ?? ""}</td>
+              <td className="px-3 py-2 tabular-nums">{m.measured_value ?? "-"} {m.units ?? ""}</td>
+              <td className="px-3 py-2">{m.power_state ?? "-"}</td>
+              <td className="px-3 py-2 text-right">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className={m.is_known_good === 1 ? "text-accent" : "text-muted-foreground"}
+                  onClick={async () => { await markKnownGood(m.id, m.is_known_good === 0); onChanged(); }}
+                >
+                  <Star />
+                </Button>
+                <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => setPendingDelete(m.id)}>
+                  <Trash2 />
+                </Button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        onOpenChange={(o) => !o && setPendingDelete(null)}
+        title="Remove this measurement?"
+        description="The measurement will be removed."
+        confirmLabel="Remove"
+        destructive
+        onConfirm={async () => { if (pendingDelete !== null) { await deleteMeasurement(pendingDelete); setPendingDelete(null); onChanged(); } }}
+      />
     </div>
   );
 }

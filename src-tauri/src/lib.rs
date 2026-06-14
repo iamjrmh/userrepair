@@ -15,6 +15,16 @@ const DB_URL: &str = "sqlite:userrepair.db";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Let the microscope tab open a USB camera. WebView2 cannot show a system
+    // permission prompt inside the app window, so without this it silently denies
+    // getUserMedia. This flag auto-accepts the camera/mic permission using the
+    // real device (it does not substitute a fake one).
+    #[cfg(target_os = "windows")]
+    std::env::set_var(
+        "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+        "--use-fake-ui-for-media-stream",
+    );
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -44,6 +54,10 @@ pub fn run() {
             commands::net::net_health,
             commands::net::start_host_server,
             commands::net::host_lan_ip,
+            commands::update::get_app_version,
+            commands::update::check_for_update,
+            commands::update::install_update,
+            commands::camera::save_capture,
         ])
         .run(tauri::generate_context!())
         .expect("error while running userrepair");

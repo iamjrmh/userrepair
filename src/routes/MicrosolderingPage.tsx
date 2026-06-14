@@ -1,256 +1,338 @@
-import { useState } from "react";
-import { Microscope, Plus, Star, Trash2 } from "lucide-react";
+import { useRef, useState } from "react";
+import { Upload, Trash2, AlertTriangle, Microscope, ExternalLink } from "lucide-react";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { PageHeader } from "@/components/shared/PageHeader";
-import { EmptyState } from "@/components/shared/EmptyState";
-import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import {
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
-} from "@/components/ui/select";
 import { Combobox } from "@/components/ui/combobox";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { toast } from "@/components/ui/sonner";
 import { useAsync } from "@/hooks/useAsync";
-import { listBoardRevisions, createBoardRevision } from "@/lib/repos/boards";
-import {
-  listMeasurements,
-  createMeasurement,
-  markKnownGood,
-  deleteMeasurement,
-  type MeasurementRow,
-} from "@/lib/repos/measurements";
-import type { MeasurementKind } from "@/types";
+import { CameraStage } from "@/components/camera/CameraStage";
+import { CameraControls } from "@/components/camera/CameraControls";
+import { getSetting } from "@/lib/repos/settings";
+import { saveCapture } from "@/lib/camera";
+import { attachFileToTicket } from "@/lib/repos/attachments";
+import { listTickets } from "@/lib/repos/tickets";
 
-const KINDS: { value: MeasurementKind; label: string }[] = [
-  { value: "voltage", label: "Voltage" },
-  { value: "resistance", label: "Resistance" },
-  { value: "diode", label: "Diode mode" },
-  { value: "thermal", label: "Thermal" },
-  { value: "scope", label: "Oscilloscope" },
-  { value: "injection", label: "Injection" },
-  { value: "microscope", label: "Microscope" },
-];
+interface Capture {
+  id: string;
+  kind: "photo" | "video";
+  url: string;
+  path: string;
+  fileName: string;
+}
+
+const LS_DEVICE = "camera.device";
+const LS_FLIP_H = "camera.flipH";
+const LS_FLIP_V = "camera.flipV";
+
+function stamp(): string {
+  return new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+}
 
 export default function MicrosolderingPage() {
-  const { data: boards, reload: reloadBoards } = useAsync(listBoardRevisions, []);
-  const [boardId, setBoardId] = useState<string>("none");
-  const selectedBoard = boardId === "none" ? null : Number(boardId);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
 
-  const { data: measurements, reload } = useAsync(
-    () => (selectedBoard === null ? Promise.resolve([]) : listMeasurements({ boardId: selectedBoard })),
-    [selectedBoard],
-  );
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [deviceId, setDeviceId] = useState<string>(() => localStorage.getItem(LS_DEVICE) ?? "");
+  const [ready, setReady] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [flipH, setFlipH] = useState<boolean>(() => localStorage.getItem(LS_FLIP_H) === "1");
+  const [flipV, setFlipV] = useState<boolean>(() => localStorage.getItem(LS_FLIP_V) === "1");
+  const [recording, setRecording] = useState(false);
+  const [captures, setCaptures] = useState<Capture[]>([]);
+  const [outputDir, setOutputDir] = useState<string>("");
+  const [uploadFor, setUploadFor] = useState<Capture | null>(null);
+
+  useAsync(async () => {
+    setOutputDir(await getSetting<string>("camera.output_dir", ""));
+    return null;
+  }, []);
+
+  function pickDevice(id: string) {
+    localStorage.setItem(LS_DEVICE, id);
+    setDeviceId(id);
+  }
+  function toggleFlipH() {
+    setFlipH((v) => { localStorage.setItem(LS_FLIP_H, v ? "0" : "1"); return !v; });
+  }
+  function toggleFlipV() {
+    setFlipV((v) => { localStorage.setItem(LS_FLIP_V, v ? "0" : "1"); return !v; });
+  }
+
+  async function persist(blob: Blob, fileName: string, kind: "photo" | "video") {
+    try {
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      const path = await saveCapture(outputDir, fileName, bytes);
+      const url = URL.createObjectURL(blob);
+      setCaptures((c) => [
+        { id: `${Date.now()}-${Math.round(Math.random() * 1e6)}`, kind, url, path, fileName },
+        ...c,
+      ]);
+      toast.success(`Saved ${fileName}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not save capture");
+    }
+  }
+
+  async function snapshot() {
+    const video = videoRef.current;
+    if (!video || !ready) return;
+    if (!outputDir) { toast.error("A manager needs to set the capture folder in Settings"); return; }
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    if (!w || !h) { toast.error("Camera is still warming up"); return; }
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    // Bake the current mirror/flip into the saved image so it matches the view.
+    ctx.translate(flipH ? w : 0, flipV ? h : 0);
+    ctx.scale(flipH ? -1 : 1, flipV ? -1 : 1);
+    ctx.drawImage(video, 0, 0, w, h);
+    const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/png"));
+    if (!blob) { toast.error("Capture failed"); return; }
+    await persist(blob, `snapshot-${stamp()}.png`, "photo");
+  }
+
+  function toggleRecord() {
+    if (recording) {
+      recorderRef.current?.stop();
+      return;
+    }
+    const stream = streamRef.current;
+    if (!stream) return;
+    if (!outputDir) { toast.error("A manager needs to set the capture folder in Settings"); return; }
+    chunksRef.current = [];
+    let rec: MediaRecorder;
+    try {
+      rec = new MediaRecorder(stream, { mimeType: "video/webm" });
+    } catch {
+      try {
+        rec = new MediaRecorder(stream);
+      } catch {
+        toast.error("Recording is not supported here");
+        return;
+      }
+    }
+    rec.ondataavailable = (ev) => { if (ev.data.size > 0) chunksRef.current.push(ev.data); };
+    rec.onstop = () => {
+      const blob = new Blob(chunksRef.current, { type: "video/webm" });
+      chunksRef.current = [];
+      void persist(blob, `recording-${stamp()}.webm`, "video");
+      setRecording(false);
+    };
+    recorderRef.current = rec;
+    rec.start();
+    setRecording(true);
+  }
+
+  function removeCapture(id: string) {
+    setCaptures((list) => {
+      const target = list.find((c) => c.id === id);
+      if (target) URL.revokeObjectURL(target.url);
+      return list.filter((c) => c.id !== id);
+    });
+  }
+
+  async function openPopout() {
+    const params = new URLSearchParams({
+      popout: "camera",
+      device: deviceId,
+      flipH: flipH ? "1" : "0",
+      flipV: flipV ? "1" : "0",
+    });
+    try {
+      const existing = await WebviewWindow.getByLabel("camera-popout");
+      if (existing) { await existing.setFocus(); return; }
+    } catch {
+      // fall through and create a fresh window
+    }
+    const win = new WebviewWindow("camera-popout", {
+      url: `index.html?${params.toString()}`,
+      title: "Microscope - userrepair",
+      width: 1000,
+      height: 640,
+    });
+    win.once("tauri://error", () => toast.error("Could not open the pop-out window"));
+  }
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Microsoldering"
-        description="Board-level measurements, known-good values, and reasoning."
+        description="Live microscope feed. Zoom, pan, mirror, fullscreen, or pop out to another screen. Capture photos and clips to your local folder and upload them to a ticket."
       />
 
-      <Card>
-        <CardHeader><CardTitle>Board revision</CardTitle></CardHeader>
-        <CardContent className="flex items-end gap-3">
-          <div className="w-80 space-y-1.5">
-            <Label>Active board revision</Label>
-            <Combobox
-              options={(boards ?? []).map((b) => ({ value: String(b.id), label: `${b.device_model} - ${b.revision}` }))}
-              value={boardId === "none" ? null : boardId}
-              onChange={setBoardId}
-              placeholder="Select a board revision"
-              searchPlaceholder="Search boards / devices..."
-            />
-          </div>
-          <NewBoardButton onCreated={reloadBoards} />
-        </CardContent>
-      </Card>
+      {!outputDir && (
+        <div className="flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+          <span>No capture folder is set. A manager can set one under Settings -&gt; Bench before snapshots and recordings can be saved.</span>
+        </div>
+      )}
 
-      {selectedBoard === null ? (
-        <EmptyState icon={Microscope} title="Select a board revision" description="Pick or create a board revision to log measurements against it." />
-      ) : (
-        <Tabs defaultValue="log">
-          <TabsList>
-            <TabsTrigger value="log">Measurements</TabsTrigger>
-            <TabsTrigger value="known">Known good</TabsTrigger>
-          </TabsList>
-          <TabsContent value="log" className="space-y-4">
-            <MeasurementForm boardId={selectedBoard} onSaved={reload} />
-            <MeasurementList rows={measurements ?? []} onChanged={reload} />
-          </TabsContent>
-          <TabsContent value="known">
-            <MeasurementList rows={(measurements ?? []).filter((m) => m.is_known_good === 1)} onChanged={reload} knownGoodView />
-          </TabsContent>
-        </Tabs>
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="w-72 space-y-1.5">
+          <Label>Camera</Label>
+          <Combobox
+            options={devices.map((d, i) => ({ value: d.deviceId, label: d.label || `Camera ${i + 1}` }))}
+            value={deviceId || null}
+            onChange={pickDevice}
+            placeholder="Select a camera"
+            searchPlaceholder="Search cameras..."
+          />
+        </div>
+        <CameraControls
+          zoom={zoom}
+          setZoom={setZoom}
+          flipH={flipH}
+          toggleFlipH={toggleFlipH}
+          flipV={flipV}
+          toggleFlipV={toggleFlipV}
+          ready={ready}
+          recording={recording}
+          onSnapshot={snapshot}
+          onRecord={toggleRecord}
+        />
+      </div>
+
+      <div style={{ aspectRatio: "16 / 10" }}>
+        <CameraStage
+          deviceId={deviceId}
+          zoom={zoom}
+          flipH={flipH}
+          flipV={flipV}
+          recording={recording}
+          videoRef={videoRef}
+          onStream={(s) => { streamRef.current = s; }}
+          onDevices={setDevices}
+          onActiveDevice={pickDevice}
+          onReadyChange={setReady}
+          extraButtons={
+            <Button variant="secondary" size="icon-sm" onClick={openPopout} title="Pop out to a window" aria-label="Pop out to a window">
+              <ExternalLink />
+            </Button>
+          }
+          overlay={
+            <CameraControls
+              dark
+              zoom={zoom}
+              setZoom={setZoom}
+              flipH={flipH}
+              toggleFlipH={toggleFlipH}
+              flipV={flipV}
+              toggleFlipV={toggleFlipV}
+              ready={ready}
+              recording={recording}
+              onSnapshot={snapshot}
+              onRecord={toggleRecord}
+            />
+          }
+        />
+      </div>
+
+      <div>
+        <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+          <Microscope className="h-4 w-4" /> Captures this session
+        </div>
+        {captures.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Photos and clips you take are saved to your folder and listed here. Use Upload to attach one to a ticket.</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            {captures.map((c) => (
+              <div key={c.id} className="overflow-hidden rounded-lg border border-border bg-card">
+                <div className="aspect-video bg-black">
+                  {c.kind === "photo" ? (
+                    <img src={c.url} alt={c.fileName} className="h-full w-full object-contain" />
+                  ) : (
+                    <video src={c.url} controls className="h-full w-full object-contain" />
+                  )}
+                </div>
+                <div className="space-y-2 p-2">
+                  <div className="truncate text-xs text-muted-foreground" title={c.fileName}>{c.fileName}</div>
+                  <div className="flex items-center justify-between gap-1">
+                    <Button variant="outline" size="sm" onClick={() => setUploadFor(c)}><Upload /> Upload</Button>
+                    <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => removeCapture(c.id)} aria-label="Remove from list">
+                      <Trash2 />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {uploadFor && (
+        <UploadToTicketDialog capture={uploadFor} onClose={() => setUploadFor(null)} />
       )}
     </div>
   );
 }
 
-function NewBoardButton({ onCreated }: { onCreated: () => void }) {
-  const [model, setModel] = useState("");
-  const [rev, setRev] = useState("");
+function UploadToTicketDialog({ capture, onClose }: { capture: Capture; onClose: () => void }) {
+  const { data: tickets } = useAsync(listTickets, []);
+  const [ticketId, setTicketId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  async function create() {
-    if (model.trim() === "" || rev.trim() === "") {
-      toast.error("Model and revision required");
-      return;
+  async function upload() {
+    if (!ticketId) { toast.error("Pick a ticket"); return; }
+    setBusy(true);
+    try {
+      await attachFileToTicket(
+        Number(ticketId),
+        capture.path,
+        capture.fileName,
+        capture.kind === "photo" ? "during" : "file",
+      );
+      toast.success("Uploaded to ticket");
+      onClose();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setBusy(false);
     }
-    await createBoardRevision({ device_model: model, revision: rev, layer_count: null, primary_soc: null, pmic: null, notes: null });
-    setModel("");
-    setRev("");
-    toast.success("Board revision created");
-    onCreated();
   }
 
   return (
-    <div className="flex items-end gap-2">
-      <div className="space-y-1.5"><Label>New model</Label><Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="MacBook Pro 2019" className="w-44" /></div>
-      <div className="space-y-1.5"><Label>Revision</Label><Input value={rev} onChange={(e) => setRev(e.target.value)} placeholder="820-01700" className="w-36" /></div>
-      <Button variant="outline" onClick={create}><Plus /> Add</Button>
-    </div>
-  );
-}
-
-function MeasurementForm({ boardId, onSaved }: { boardId: number; onSaved: () => void }) {
-  const [kind, setKind] = useState<MeasurementKind>("voltage");
-  const [form, setForm] = useState({
-    test_point: "",
-    reference_designator: "",
-    rail_name: "",
-    power_state: "on",
-    expected_value: "",
-    measured_value: "",
-    units: "V",
-    notes: "",
-  });
-  function set<K extends keyof typeof form>(k: K, v: string) { setForm((f) => ({ ...f, [k]: v })); }
-
-  async function submit() {
-    await createMeasurement({
-      ticket_id: null,
-      board_revision_id: boardId,
-      technician_id: null,
-      kind,
-      test_point: form.test_point || null,
-      reference_designator: form.reference_designator || null,
-      rail_name: form.rail_name || null,
-      power_state: form.power_state || null,
-      expected_value: form.expected_value || null,
-      measured_value: form.measured_value || null,
-      units: form.units || null,
-      measurement_mode: null,
-      orientation: null,
-      signal_type: null,
-      frequency: null,
-      result: null,
-      notes: form.notes || null,
-    });
-    setForm({ ...form, test_point: "", reference_designator: "", expected_value: "", measured_value: "", notes: "" });
-    toast.success("Measurement logged");
-    onSaved();
-  }
-
-  return (
-    <Card>
-      <CardHeader><CardTitle>Log measurement</CardTitle></CardHeader>
-      <CardContent className="space-y-3">
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Upload to ticket</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <p className="truncate text-sm text-muted-foreground">{capture.fileName}</p>
           <div className="space-y-1.5">
-            <Label>Type</Label>
-            <Select value={kind} onValueChange={(v) => setKind(v as MeasurementKind)}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>{KINDS.map((k) => <SelectItem key={k.value} value={k.value}>{k.label}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5"><Label>Test point</Label><Input value={form.test_point} onChange={(e) => set("test_point", e.target.value)} /></div>
-          <div className="space-y-1.5"><Label>Reference</Label><Input value={form.reference_designator} onChange={(e) => set("reference_designator", e.target.value)} placeholder="U2 / C12" /></div>
-          <div className="space-y-1.5"><Label>Rail / signal</Label><Input value={form.rail_name} onChange={(e) => set("rail_name", e.target.value)} placeholder="PP3V3_SUS" /></div>
-        </div>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <div className="space-y-1.5"><Label>Expected</Label><Input value={form.expected_value} onChange={(e) => set("expected_value", e.target.value)} /></div>
-          <div className="space-y-1.5"><Label>Measured</Label><Input value={form.measured_value} onChange={(e) => set("measured_value", e.target.value)} /></div>
-          <div className="space-y-1.5"><Label>Units</Label><Input value={form.units} onChange={(e) => set("units", e.target.value)} /></div>
-          <div className="space-y-1.5">
-            <Label>Power state</Label>
-            <Select value={form.power_state} onValueChange={(v) => set("power_state", v)}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="off">Off</SelectItem>
-                <SelectItem value="standby">Standby</SelectItem>
-                <SelectItem value="on">On</SelectItem>
-              </SelectContent>
-            </Select>
+            <Label>Ticket</Label>
+            <Combobox
+              options={(tickets ?? []).map((t) => ({
+                value: String(t.id),
+                label: `${t.ticket_number} - ${t.title}`,
+                hint: t.customer_name ?? undefined,
+              }))}
+              value={ticketId}
+              onChange={setTicketId}
+              placeholder="Select a ticket"
+              searchPlaceholder="Search tickets..."
+            />
           </div>
         </div>
-        <div className="space-y-1.5"><Label>Notes</Label><Input value={form.notes} onChange={(e) => set("notes", e.target.value)} /></div>
-        <Button onClick={submit}><Plus /> Log measurement</Button>
-      </CardContent>
-    </Card>
-  );
-}
-
-function MeasurementList({ rows, onChanged, knownGoodView }: { rows: MeasurementRow[]; onChanged: () => void; knownGoodView?: boolean }) {
-  const [pendingDelete, setPendingDelete] = useState<number | null>(null);
-  if (rows.length === 0) {
-    return <EmptyState icon={Microscope} title={knownGoodView ? "No known-good values" : "No measurements"} description={knownGoodView ? "Star a measurement to add it to the reference set." : "Log your first measurement above."} />;
-  }
-  return (
-    <div className="overflow-hidden rounded-lg border border-border">
-      <table className="w-full text-sm">
-        <thead className="bg-card text-muted-foreground">
-          <tr className="border-b border-border">
-            <th className="px-3 py-2 text-left">Type</th>
-            <th className="px-3 py-2 text-left">Point / Ref</th>
-            <th className="px-3 py-2 text-left">Rail</th>
-            <th className="px-3 py-2 text-left">Expected</th>
-            <th className="px-3 py-2 text-left">Measured</th>
-            <th className="px-3 py-2 text-left">State</th>
-            <th className="px-3 py-2"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((m) => (
-            <tr key={m.id} className="border-b border-border/60">
-              <td className="px-3 py-2"><Badge variant="secondary">{m.kind}</Badge></td>
-              <td className="px-3 py-2 font-mono text-xs">{m.test_point ?? m.reference_designator ?? "-"}</td>
-              <td className="px-3 py-2">{m.rail_name ?? "-"}</td>
-              <td className="px-3 py-2 tabular-nums">{m.expected_value ?? "-"} {m.units ?? ""}</td>
-              <td className="px-3 py-2 tabular-nums">{m.measured_value ?? "-"} {m.units ?? ""}</td>
-              <td className="px-3 py-2">{m.power_state ?? "-"}</td>
-              <td className="px-3 py-2 text-right">
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className={m.is_known_good === 1 ? "text-accent" : "text-muted-foreground"}
-                  onClick={async () => { await markKnownGood(m.id, m.is_known_good === 0); onChanged(); }}
-                >
-                  <Star />
-                </Button>
-                <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => setPendingDelete(m.id)}>
-                  <Trash2 />
-                </Button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <ConfirmDialog
-        open={pendingDelete !== null}
-        onOpenChange={(o) => !o && setPendingDelete(null)}
-        title="Remove this measurement?"
-        description="The measurement will be removed."
-        confirmLabel="Remove"
-        destructive
-        onConfirm={async () => { if (pendingDelete !== null) { await deleteMeasurement(pendingDelete); setPendingDelete(null); onChanged(); } }}
-      />
-    </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={upload} disabled={busy || !ticketId}>{busy ? "Uploading..." : "Upload"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

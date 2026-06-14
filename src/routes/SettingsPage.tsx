@@ -1,5 +1,6 @@
-import { useState, type ChangeEvent } from "react";
-import { Plus, Trash2, Save, Plug, Gift, Upload, Network, Copy, Printer } from "lucide-react";
+import { useState, useEffect, type ChangeEvent } from "react";
+import { Plus, Trash2, Save, Plug, Gift, Upload, Network, Copy, Printer, FolderOpen, Camera } from "lucide-react";
+import { open as openDirectory } from "@tauri-apps/plugin-dialog";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -17,7 +18,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
 import { useAsync } from "@/hooks/useAsync";
-import { loadSettings, setSetting } from "@/lib/repos/settings";
+import { loadSettings, setSetting, getSetting } from "@/lib/repos/settings";
 import {
   listAccounts,
   createAccount,
@@ -60,6 +61,7 @@ export default function SettingsPage() {
           <TabsTrigger value="payments">Payments</TabsTrigger>
           <TabsTrigger value="rewards">Rewards</TabsTrigger>
           <TabsTrigger value="network">Network</TabsTrigger>
+          <TabsTrigger value="bench">Bench</TabsTrigger>
           <TabsTrigger value="appearance">Appearance</TabsTrigger>
           <TabsTrigger value="database">Database</TabsTrigger>
         </TabsList>
@@ -81,6 +83,9 @@ export default function SettingsPage() {
         <TabsContent value="network">
           <NetworkSettings />
         </TabsContent>
+        <TabsContent value="bench">
+          <CameraSettings />
+        </TabsContent>
         <TabsContent value="appearance">
           <AppearanceSettings />
         </TabsContent>
@@ -89,6 +94,57 @@ export default function SettingsPage() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+function CameraSettings() {
+  const [dir, setDir] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void getSetting<string>("camera.output_dir", "").then(setDir);
+  }, []);
+
+  async function choose() {
+    const picked = await openDirectory({ directory: true, multiple: false });
+    if (typeof picked !== "string") return;
+    setSaving(true);
+    try {
+      await setSetting("camera.output_dir", picked);
+      setDir(picked);
+      toast.success("Capture folder set");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function clear() {
+    setSaving(true);
+    try {
+      await setSetting("camera.output_dir", "");
+      setDir("");
+      toast.success("Capture folder cleared");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><Camera className="h-4 w-4" /> Microscope captures</CardTitle>
+        <CardDescription>Where the Microsoldering tab saves photos and recordings. Captures stay local to each PC and are not synced; a technician can still upload any capture to a ticket.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <Label>Capture output folder</Label>
+        <div className="flex items-center gap-2">
+          <Input readOnly value={dir ?? ""} placeholder="No folder set" className="font-mono text-xs" />
+          <Button variant="outline" onClick={choose} disabled={saving}><FolderOpen /> Choose</Button>
+          {dir ? <Button variant="ghost" onClick={clear} disabled={saving}>Clear</Button> : null}
+        </div>
+        <p className="text-xs text-muted-foreground">Technicians and managers can capture from the microscope; only managers and the owner can change this folder.</p>
+      </CardContent>
+    </Card>
   );
 }
 

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Clock, Plus, Package, Trash2, Lock } from "lucide-react";
+import { ArrowLeft, Clock, Plus, Package, Trash2, Lock, Paperclip } from "lucide-react";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,8 @@ import {
 } from "@/lib/repos/tickets";
 import { getSetting } from "@/lib/repos/settings";
 import { listItems } from "@/lib/repos/inventory";
+import { listTicketAttachments, deleteTicketAttachment } from "@/lib/repos/attachments";
+import { attachmentUrl } from "@/lib/attachmentUrl";
 import { statusVariant, priorityVariant, TICKET_STATUS_FLOW, TICKET_TERMINAL_STATUSES } from "@/lib/status";
 import { formatDateTime, formatRelative, formatCents } from "@/lib/format";
 import type { TicketStatus } from "@/types";
@@ -196,6 +198,8 @@ export default function TicketDetailPage() {
           <PartsCard ticketId={ticketId} parts={parts} technicianId={ticket.technician_id} onChanged={reload} disabled={readOnly} />
 
           <LaborCard ticketId={ticketId} disabled={readOnly} />
+
+          <TicketAttachmentsCard ticketId={ticketId} disabled={readOnly} />
         </div>
 
         <div className="space-y-4">
@@ -291,6 +295,55 @@ function LaborCard({ ticketId, disabled }: { ticketId: number; disabled?: boolea
             </div>
           )}
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function TicketAttachmentsCard({ ticketId, disabled }: { ticketId: number; disabled?: boolean }) {
+  const { data, reload } = useAsync(async () => {
+    const rows = await listTicketAttachments(ticketId);
+    return Promise.all(rows.map(async (row) => ({ row, url: await attachmentUrl(row.relative_path) })));
+  }, [ticketId]);
+  const items = data ?? [];
+
+  return (
+    <Card>
+      <CardHeader><CardTitle className="flex items-center gap-2"><Paperclip className="h-4 w-4" /> Photos &amp; captures</CardTitle></CardHeader>
+      <CardContent>
+        {items.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No photos or videos yet. Capture from the Microsoldering tab and use Upload to attach one here.</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {items.map(({ row, url }) => {
+              const isVideo = /\.(webm|mp4|mov|mkv)$/i.test(row.relative_path);
+              return (
+                <div key={row.id} className="overflow-hidden rounded-lg border border-border bg-card">
+                  <div className="aspect-video bg-black">
+                    {isVideo ? (
+                      <video src={url} controls className="h-full w-full object-contain" />
+                    ) : (
+                      <img src={url} alt={row.original_name} className="h-full w-full object-contain" />
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between gap-1 p-2">
+                    <span className="truncate text-xs text-muted-foreground" title={row.original_name}>{row.original_name}</span>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      disabled={disabled}
+                      className="text-muted-foreground hover:text-destructive"
+                      onClick={async () => { await deleteTicketAttachment(row.id); reload(); }}
+                      aria-label="Remove attachment"
+                    >
+                      <Trash2 />
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

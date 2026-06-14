@@ -3,6 +3,7 @@ import { useUiStore } from "@/stores/ui";
 import { useThemeStore } from "@/stores/theme";
 import { useAuthStore } from "@/stores/auth";
 import { SyncStatus } from "@/components/layout/SyncStatus";
+import { UpdateButton } from "@/components/layout/UpdateButton";
 import { ROLE_LABEL } from "@/lib/roles";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -38,6 +39,7 @@ export function Topbar() {
 
       <div className="ml-auto flex items-center gap-2">
         <SyncStatus />
+        <UpdateButton />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" aria-label="Theme">

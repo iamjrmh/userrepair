@@ -1,10 +1,12 @@
-import { Suspense } from "react";
+import { Suspense, useEffect } from "react";
 import { Outlet } from "react-router-dom";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
 import { CommandPalette } from "@/components/layout/CommandPalette";
+import { UpdateDialog } from "@/components/layout/UpdateDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSyncMonitor } from "@/hooks/useSyncMonitor";
+import { useUpdateStore } from "@/stores/update";
 
 function RouteFallback() {
   return (
@@ -17,6 +19,13 @@ function RouteFallback() {
 
 export function AppLayout() {
   useSyncMonitor();
+
+  // Check for an update once, when the app opens. No background polling: an
+  // update never appears mid-task, only a quiet dot on the top-bar button.
+  useEffect(() => {
+    void useUpdateStore.getState().check();
+  }, []);
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
       <Sidebar />
@@ -31,6 +40,7 @@ export function AppLayout() {
         </main>
       </div>
       <CommandPalette />
+      <UpdateDialog />
     </div>
   );
 }
