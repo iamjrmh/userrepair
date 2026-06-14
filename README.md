@@ -59,7 +59,7 @@ Built with **Tauri 2 (Rust)** + **React + TypeScript**.
 | **Tenders** | Cash (with change due), keyed card and Square Terminal, redeem points, or any **split** across them |
 | **Ring out tickets** | Look up an open repair by customer phone or name and pull its parts and labor into the cart |
 | **Barcode scanner** | Any generic USB scanner adds items to the cart instantly |
-| **Card reader** | Swipe a generic 3-track USB reader (e.g. MSR90) to add a card payment without typing |
+| **Card field** | A Square-powered keyed card field, styled to match the app, plus Square Reader / Terminal for swipe / tap / chip |
 | **Receipt printer** | Generates a clean local receipt for any USB / thermal printer, in 58mm or 80mm |
 | **Refunds / voids** | Reverse a sale (refunds card tenders via Square, restores stock); manager approval above a set amount |
 | **Receipts** | On-screen breakdown, change given, points earned, a printable receipt, and a link to the Square receipt |
@@ -165,7 +165,7 @@ Everything is under **Settings**:
 
 ---
 
-## Hardware: receipt printers, scanners, card readers
+## Hardware: receipt printers, scanners, card payments
 
 userrepair is built for off-the-shelf USB hardware. Nothing proprietary is required.
 
@@ -173,9 +173,9 @@ userrepair is built for off-the-shelf USB hardware. Nothing proprietary is requi
 |---|---|
 | **Receipt printer** | Any USB or thermal printer installed in Windows. userrepair builds its **own** clean receipt (logo, line items, totals, a scannable barcode of the sale number, and your footer) and prints it. Pick **58mm** or **80mm** under **Settings -> Payments -> Receipt**, and use **Print test receipt** to check alignment. The same print dialog can also **Save as PDF**. |
 | **Barcode scanner** | Any generic USB scanner (keyboard-wedge). Scan an item's barcode to add it to the cart; print barcode labels for inventory from the Inventory page. |
-| **Card reader** | Any generic 3-track USB magstripe reader, such as the **MSR90**. Swiping adds a card payment for the outstanding balance in one motion, reading the card brand, last 4, and name automatically. |
+| **Card payments** | A keyed card field powered by the Square Web Payments SDK (PCI-compliant, styled to match the app), or a **Square Reader / Terminal** for swipe / tap / chip via the Terminal tender. Card numbers are encrypted by Square and never touch this app. |
 
-> **About swiped cards and Square:** for PCI compliance, a generic magstripe reader cannot push a card into Square's secure charge flow, so a **swipe records the card payment** (brand + last 4 only; the full card number is never stored or sent). To **charge** a card through Square, use the keyed card field or a **Square Terminal / Reader** (the Terminal tender), which encrypts the card in hardware.
+> **Note on card readers:** for PCI compliance, card-present swipe / tap / chip goes through Square's own encrypted **Reader** or **Terminal** (the Terminal tender). A generic magstripe reader is not used, because the magnetic stripe does not carry the CVV and Square's card field is a secure cross-origin element that cannot be auto-filled.
 
 ---
 
@@ -259,9 +259,9 @@ Passwords use Argon2id.
 src/                  React + TypeScript frontend
   routes/             one page per module (POS, tickets, inventory, ...)
   components/         ui/ (shadcn), layout/, shared/, pos/, customers/
-  lib/                db.ts, net.ts (LAN routing), receipt.ts, magstripe.ts, repos/, validators, format, roles, image
+  lib/                db.ts, net.ts (LAN routing), receipt.ts, square.ts, repos/, validators, format, roles, image
   stores/             Zustand (auth, theme, ui, brand)
-  hooks/              useAsync, useBarcodeScanner, useCardSwipe
+  hooks/              useAsync, useBarcodeScanner
   types/              shared types (no any)
 src-tauri/            Rust backend
   src/db/             migrations.rs + schema.sql + seed_*.sql
@@ -289,9 +289,10 @@ plugins/              example plugin manifest
   instead of the local SQLite. The host serves `/db/select`, `/db/execute`, `/db/tx`, and a
   `/cmd` proxy, gated by a shared key. Network role is stored per-machine in `localStorage`.
 - Receipts are generated locally as a width-correct (58mm / 80mm) HTML document and printed
-  through a hidden iframe, so any installed printer works and the dialog can save a PDF. A
-  generic 3-track card reader is read as a HID keyboard-wedge (`useCardSwipe`) and parsed to
-  brand + last 4 only; the full PAN is never stored or transmitted.
+  through a hidden iframe, so any installed printer works and the dialog can save a PDF.
+- Card entry uses the Square Web Payments SDK: the card field is tokenized in a secure
+  cross-origin element (styled from the app's theme variables) and the charge is made from
+  Rust, so the access token and card numbers never sit in the frontend.
 - Conventions: integer-cent money, ISO 8601 UTC dates, soft deletes, foreign keys on,
   transactional multi-table writes.
 

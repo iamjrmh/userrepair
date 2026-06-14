@@ -17,8 +17,15 @@ export interface SquareCard {
   destroy(): Promise<void>;
 }
 
+/** Subset of the Square Card style object (per-selector CSS-like properties). */
+export type SquareCardStyle = Record<string, Record<string, string>>;
+
+interface SquareCardOptions {
+  style?: SquareCardStyle;
+}
+
 interface SquarePayments {
-  card(): Promise<SquareCard>;
+  card(options?: SquareCardOptions): Promise<SquareCard>;
 }
 
 interface SquareSdk {
@@ -82,13 +89,14 @@ function loadSdk(environment: "production" | "sandbox"): Promise<SquareSdk> {
 export async function createCardForm(
   settings: SquareSettings,
   selector: string,
+  style?: SquareCardStyle,
 ): Promise<SquareCard> {
   if (!settings.applicationId || !settings.locationId) {
     throw new Error("Square application id and location id are required (Settings > Payments).");
   }
   const sdk = await loadSdk(settings.environment);
   const payments = sdk.payments(settings.applicationId, settings.locationId);
-  const card = await payments.card();
+  const card = await payments.card(style ? { style } : undefined);
   await card.attach(selector);
   return card;
 }

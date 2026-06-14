@@ -50,8 +50,8 @@ GOTO :end
         ECHO [push] No changes to commit.
     )
 
-    ECHO [push] Pushing to %REPO% (%BRANCH%)...
-    git push -u origin %BRANCH% || goto :error
+    ECHO [push] Force-pushing to %REPO% (%BRANCH%)...
+    git push -u --force origin %BRANCH% || goto :error
 
     ECHO.
     ECHO [push] Done.

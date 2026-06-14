@@ -14,6 +14,7 @@ import {
   Settings,
   Ticket,
   Search,
+  Lock,
   X,
 } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -51,12 +52,12 @@ import {
   tokenizeCard,
   type SquareSettings,
   type SquareCard,
+  type SquareCardStyle,
 } from "@/lib/square";
 import { formatCents, dollarsToCents, centsToDollars, formatRelative } from "@/lib/format";
 import type { SquarePaymentResult, SquareTerminalResult, PosSale } from "@/types";
 import { printReceipt, type ReceiptPayload } from "@/lib/receipt";
-import { useCardSwipe } from "@/hooks/useCardSwipe";
-import type { SwipedCard } from "@/lib/magstripe";
+import { useThemeStore } from "@/stores/theme";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -124,10 +125,7 @@ export default function POSPage() {
   }
 
   const handleScan = useCallback(async (code: string) => {
-    const trimmed = code.trim();
-    // Magstripe swipes also end with Enter; the card-swipe hook handles those.
-    if (/^[%;]/.test(trimmed)) return;
-    const item = await findItemBySku(trimmed);
+    const item = await findItemBySku(code.trim());
     if (!item) {
       toast.error(`No item with code ${code}`);
       return;
@@ -141,26 +139,6 @@ export default function POSPage() {
   }, []);
 
   useBarcodeScanner((code) => void handleScan(code));
-
-  // Generic 3-track USB card reader (e.g. MSR90): a swipe records a card tender
-  // for the outstanding balance. Card data is summarized to brand + last 4; the
-  // full number is never stored or sent (see lib/magstripe.ts).
-  const addSwipedCard = useCallback(
-    (card: SwipedCard) => {
-      const amount = remaining > 0 ? remaining : totals.total_cents;
-      if (amount <= 0) {
-        toast.error("Add items before swiping a card");
-        return;
-      }
-      setTenders((t) => [
-        ...t,
-        { method: "card", amount_cents: amount, card_brand: card.brand, last4: card.last4 },
-      ]);
-      toast.success(`${card.brand} ****${card.last4}${card.name ? ` (${card.name})` : ""} added`);
-    },
-    [remaining, totals.total_cents],
-  );
-  useCardSwipe(addSwipedCard, !receipt && !processing && cart.length > 0);
 
   function setQty(idx: number, qty: number) {
     setCart((c) => c.map((it, i) => (i === idx ? { ...it, quantity: Number.isFinite(qty) && qty > 0 ? qty : it.quantity } : it)));
@@ -481,11 +459,6 @@ export default function POSPage() {
                     onTerminal={addTerminalTender}
                     onRewards={addRewardsTender}
                   />
-                ) : null}
-                {remaining > 0 ? (
-                  <p className="text-center text-[11px] text-muted-foreground">
-                    Tip: swipe a USB card reader to add a card payment without typing.
-                  </p>
                 ) : (
                   <Button className="w-full" disabled={processing || cart.length === 0} onClick={finish}>
                     Finish &amp; record sale
@@ -713,12 +686,13 @@ function CardCheckout({
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tokenizing, setTokenizing] = useState(false);
+  const themeMode = useThemeStore((s) => s.mode);
 
   useEffect(() => {
     let active = true;
     setReady(false);
     setError(null);
-    createCardForm(settings, "#sq-card-container")
+    createCardForm(settings, "#sq-card-container", squareCardStyle())
       .then((card) => {
         if (active) {
           cardRef.current = card;
@@ -736,11 +710,13 @@ function CardCheckout({
       cardRef.current = null;
       if (card) void card.destroy();
     };
-  }, [settings]);
+    // Rebuild the field when the theme changes so the colors stay in sync.
+  }, [settings, themeMode]);
 
   async function pay() {
     if (!cardRef.current) return;
     setTokenizing(true);
+    setError(null);
     try {
       const token = await tokenizeCard(cardRef.current);
       await onCharge(token);
@@ -752,14 +728,65 @@ function CardCheckout({
   }
 
   return (
-    <div className="space-y-2">
-      <div id="sq-card-container" className="min-h-[90px] rounded-md border border-input bg-background p-2" />
-      {error && <p className="text-xs text-destructive">{error}</p>}
-      <Button className="w-full" disabled={disabled || !ready || tokenizing} onClick={pay}>
-        {tokenizing ? "Processing..." : `Charge ${formatCents(amount)}`}
+    <div className="space-y-3">
+      <div className="rounded-xl border border-border bg-card p-3 shadow-sm">
+        <div className="mb-2.5 flex items-center justify-between">
+          <span className="flex items-center gap-2 text-sm font-medium">
+            <CreditCard className="h-4 w-4 text-primary" /> Card details
+          </span>
+          <span className="text-sm font-semibold tabular-nums">{formatCents(amount)}</span>
+        </div>
+        <div
+          id="sq-card-container"
+          className="min-h-[44px] transition-opacity duration-200"
+          style={{ opacity: ready ? 1 : 0.45 }}
+        />
+        {!ready && !error && (
+          <p className="mt-2 text-xs text-muted-foreground">Loading secure card field...</p>
+        )}
+        {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
+        <p className="mt-2.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <Lock className="h-3 w-3 shrink-0" /> Encrypted and processed by Square. Card numbers never touch this app.
+        </p>
+      </div>
+      <Button className="w-full" size="lg" disabled={disabled || !ready || tokenizing} onClick={pay}>
+        {tokenizing ? (
+          "Processing..."
+        ) : (
+          <>
+            <Lock className="h-4 w-4" /> Charge {formatCents(amount)}
+          </>
+        )}
       </Button>
     </div>
   );
+}
+
+/**
+ * Build a Square Card style object from the app's live theme variables so the
+ * hosted card field blends into the surrounding UI in both light and dark mode.
+ */
+function squareCardStyle(): SquareCardStyle {
+  const root = getComputedStyle(document.documentElement);
+  const v = (name: string) => `hsl(${root.getPropertyValue(name).trim()})`;
+  return {
+    input: {
+      color: v("--foreground"),
+      backgroundColor: v("--card"),
+      fontSize: "15px",
+    },
+    "input::placeholder": { color: v("--muted-foreground") },
+    ".input-container": {
+      borderColor: v("--input"),
+      borderRadius: "8px",
+    },
+    ".input-container.is-focus": { borderColor: v("--ring") },
+    ".input-container.is-error": { borderColor: v("--destructive") },
+    ".message-text": { color: v("--muted-foreground") },
+    ".message-icon": { color: v("--muted-foreground") },
+    ".message-text.is-error": { color: v("--destructive") },
+    ".message-icon.is-error": { color: v("--destructive") },
+  };
 }
 
 function ReceiptPanel({ receipt, onDone }: { receipt: ReceiptPayload; onDone: () => void }) {
