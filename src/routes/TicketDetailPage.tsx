@@ -432,7 +432,7 @@ function PartsCard({
       <CardContent className="space-y-3">
         <div className="grid grid-cols-[1fr_auto] gap-2">
           <Combobox
-            options={[{ value: "none", label: "Free text part" }, ...(items ?? []).map((i) => ({ value: String(i.id), label: i.description, hint: `qty ${i.quantity}` }))]}
+            options={[{ value: "none", label: "Free text part" }, ...(items ?? []).map((i) => ({ value: String(i.id), label: (i.sku ? i.sku + " - " : "") + i.description, hint: `qty ${i.quantity}` }))]}
             value={itemId}
             onChange={setItemId}
             placeholder="From inventory"

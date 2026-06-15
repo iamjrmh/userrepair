@@ -309,7 +309,7 @@ export default function POSPage() {
             <CardHeader><CardTitle>Add to cart</CardTitle></CardHeader>
             <CardContent className="space-y-2">
               <Combobox
-                options={(items ?? []).map((i) => ({ value: String(i.id), label: i.description, hint: `${formatCents(i.sale_price_cents || i.unit_cost_cents)} - qty ${i.quantity}` }))}
+                options={(items ?? []).map((i) => ({ value: String(i.id), label: (i.sku ? i.sku + " - " : "") + i.description, hint: `${formatCents(i.sale_price_cents || i.unit_cost_cents)} - qty ${i.quantity}` }))}
                 value={null}
                 onChange={(v) => {
                   const it = (items ?? []).find((i) => String(i.id) === v);
