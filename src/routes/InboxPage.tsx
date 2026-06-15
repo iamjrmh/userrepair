@@ -64,10 +64,11 @@ export default function InboxPage() {
   const selected = conversations.find((c) => c.contact === selectedContact) ?? null;
   const unread = conversations.reduce((n, c) => n + c.unread, 0);
 
-  // Replies arrive via the webhook into the database, so poll while open. A rev
-  // bump does a background refresh, keeping the thread on screen (no skeleton).
+  // Replies arrive via the webhook into the database, so poll often while open so
+  // nothing is missed. A rev bump does a background refresh, keeping the thread on
+  // screen (no loading skeleton). 3s feels instant without hammering the DB/host.
   useEffect(() => {
-    const t = setInterval(() => broadcastChange(), 12000);
+    const t = setInterval(() => broadcastChange(), 3000);
     return () => clearInterval(t);
   }, []);
 
