@@ -23,7 +23,7 @@ use std::sync::Arc;
 use axum::{
     body::Bytes,
     extract::{DefaultBodyLimit, Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
 };
@@ -82,8 +82,10 @@ pub async fn run_server(app: AppHandle, port: u16, key: String, lan_enabled: boo
         .route("/cmd", post(cmd))
         .route("/capture", post(capture))
         .route("/attach", post(attach))
+        // One inbound webhook for both SMS and email; the handler branches on
+        // eventType. /inbound/sms and /inbound/email remain as aliases.
+        .route("/inbound", post(inbound_sms))
         .route("/inbound/sms", post(inbound_sms))
-        // Pingram email inbound webhook (same handler; branches on eventType).
         .route("/inbound/email", post(inbound_sms))
         // Captures and recordings can be large; lift axum's small default limit.
         .layer(DefaultBodyLimit::max(512 * 1024 * 1024))
@@ -321,14 +323,26 @@ fn strip_tags(html: &str) -> String {
 /// `eventType` selects the channel (SMS_INBOUND vs EMAIL_INBOUND).
 async fn inbound_sms(
     State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
     Query(q): Query<HashMap<String, String>>,
     Json(body): Json<Value>,
-) -> Json<Value> {
+) -> (StatusCode, Json<Value>) {
     // Gate on the dedicated inbound token from Settings -> Notifications, NOT the
-    // LAN access key. Blank token = accept any caller.
+    // LAN access key. Blank token = accept any caller. The token may arrive on the
+    // `?token=` query OR an `x-ur-token` header (some senders strip query strings),
+    // and we return a real 401 on mismatch so failures are visible in Pingram.
     let want = setting(&state.pool, "notify.inbound_token").await;
-    if !want.is_empty() && q.get("token").map(String::as_str) != Some(want.as_str()) {
-        return unauthorized();
+    let want = want.trim();
+    if !want.is_empty() {
+        let given_q = q.get("token").map(|s| s.trim().to_string());
+        let given_h = headers
+            .get("x-ur-token")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim().to_string());
+        let ok = given_q.as_deref() == Some(want) || given_h.as_deref() == Some(want);
+        if !ok {
+            return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "bad or missing inbound token" })));
+        }
     }
 
     let pick = |keys: &[&str]| -> String {
@@ -419,7 +433,7 @@ async fn inbound_sms(
         }
     }
 
-    let _ = sqlx::query(
+    let res = sqlx::query(
         "INSERT INTO inbox_messages (channel, from_addr, from_name, customer_id, body) VALUES (?1, ?2, ?3, ?4, ?5)",
     )
     .bind(channel)
@@ -430,7 +444,13 @@ async fn inbound_sms(
     .execute(&state.pool)
     .await;
 
-    Json(json!({ "ok": true }))
+    match res {
+        Ok(_) => (StatusCode::OK, Json(json!({ "ok": true }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("inbox insert failed: {e}") })),
+        ),
+    }
 }
 
 /// Hash, store (content-deduped), and link an attachment to a ticket on the host.

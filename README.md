@@ -163,7 +163,7 @@ Everything is under **Settings**:
   Includes a manual refund tool. Refunds over a set amount require manager approval.
 - **Receipt** - choose 58mm or 80mm paper, set a footer message, and print a test receipt.
 - **Rewards** - turn the program on and set points-per-dollar and redemption value.
-- **Notifications** - email customers on status changes and send **text messages**, both via **Pingram** on one API key (real carrier SMS, it handles A2P 10DLC; emails come from each user's `username@yourdomain` address, sender name "Name (Role)", subject from the ticket name and ID). Choose which statuses notify and send tests. Your own SMTP and free **email-to-SMS** stay available as fallbacks. Text and email replies arrive in the **Inbox** (Manager+) when you point Pingram's inbound webhooks at your main PC (see [Receiving replies](#receiving-replies-cloudflare-tunnel)).
+- **Notifications** - email customers on status changes and send **text messages**, both via **Pingram** on one API key (real carrier SMS, it handles A2P 10DLC; emails come from each user's `username@yourdomain` address, sender name "Name (Role)", subject from the ticket name and ID). Choose which statuses notify and send tests. Your own SMTP and free **email-to-SMS** stay available as fallbacks. Text and email replies arrive in the **Inbox** (Manager+) when you point Pingram's inbound webhook at your main PC (see [Receiving replies](#receiving-replies-ngrok)).
 - **Network** - see this PC's role (standalone / main / client) and connection details.
 - **Bench** - set the folder where microscope photos and recordings are saved (on a multi-PC setup, every PC's captures are sent to this folder on the main PC).
 - **Staff** - create accounts, reset passwords, deactivate.
@@ -236,101 +236,56 @@ Customers are texted only when their **preferred contact** is set to SMS, and em
 
 ---
 
-## Receiving replies (Cloudflare Tunnel)
+## Receiving replies (ngrok)
 
-Sending texts and emails works on its own. To also receive **replies** in the **Inbox**, Pingram (which lives in the cloud) needs to reach your main PC, and the main PC only listens on your local network. A free **Cloudflare Tunnel** gives your main PC a public HTTPS address without opening any ports.
+Sending texts and emails works on its own. To also receive **replies** in the **Inbox**, Pingram (which lives in the cloud) needs to reach your main PC, and the main PC only listens on your local network. A free **ngrok** tunnel gives your main PC a public HTTPS address without opening any ports or touching your domain's DNS - which is why it is the recommended option here.
 
-> **About the token.** The `?token=...` on the webhook URL is **not** a Cloudflare value, and it is **not** your LAN access key. It is a dedicated **inbound webhook token** you set in **Settings -> Notifications -> Inbound webhooks** (there is a **Generate** button). Leave it blank to accept any caller. Either way, userrepair builds the full webhook URLs for you there - just paste your **Public address** (the Cloudflare URL) into that same panel and copy the finished URLs.
+> **About the token.** The `?token=...` on the webhook URL is **not** an ngrok value, and it is **not** your LAN access key. It is a dedicated **inbound webhook token** you set in **Settings -> Notifications -> Inbound webhook** (there is a **Generate** button). Leave it blank to accept any caller. Either way, userrepair builds the full webhook URL for you there - just paste your **Public address** (the ngrok URL) into that same panel and copy the finished URL. Pingram uses one inbound webhook for both SMS and email, so there is a single URL to paste.
 
-> **Works on a single PC too.** You do not need the multi-PC "main PC" mode for this. Even in "Just this PC" mode, userrepair runs a small local receiver (only the inbound webhooks are exposed - never your database) so replies reach the Inbox.
+> **Works on a single PC too.** You do not need the multi-PC "main PC" mode for this. Even in "Just this PC" mode, userrepair runs a small local receiver (only the inbound webhook is exposed - never your database) so replies reach the Inbox.
 
-You only need this for the Inbox. Set it up on the **main PC** (the one running in "This is the main PC" mode).
+The host server runs on port `8787` by default (see Settings -> Notifications for the exact address).
 
-**1. Install cloudflared**
+**1. Install ngrok and add your auth token**
 
-```powershell
-winget install --id Cloudflare.cloudflared
-```
-
-**2. Quick test (no account, temporary URL)**
-
-This is the fastest way to confirm replies work. The host server runs on port `8787` by default (see Settings -> Notifications for the exact address).
-
-```powershell
-cloudflared tunnel --url http://localhost:8787
-```
-
-It prints a URL like `https://random-words.trycloudflare.com`. In userrepair, open **Settings -> Notifications -> Inbound webhooks**, paste that into **Public address**, optionally click **Generate** for a token, and **Save**. The two finished URLs shown there become:
-
-```
-https://random-words.trycloudflare.com/inbound/sms?token=YOUR-TOKEN
-https://random-words.trycloudflare.com/inbound/email?token=YOUR-TOKEN
-```
-
-Copy the first into Pingram's **SMS -> Inbound** webhook and the second into its **Email -> Inbound** webhook, then text or email your shop and the reply should appear in the Inbox within a few seconds. Note: this temporary URL changes every time you restart the command, so it is for testing.
-
-**3. Permanent setup (stable URL, recommended)**
-
-For a URL that survives restarts you need a free Cloudflare account with a domain added to Cloudflare:
-
-```powershell
-cloudflared tunnel login
-cloudflared tunnel create userrepair
-cloudflared tunnel route dns userrepair sms.yourshop.com
-```
-
-Create a config file at `%USERPROFILE%\.cloudflared\config.yml`:
-
-```yaml
-tunnel: userrepair
-credentials-file: C:\Users\YOU\.cloudflared\<tunnel-id>.json
-ingress:
-  - hostname: sms.yourshop.com
-    service: http://localhost:8787
-  - service: http_status:404
-```
-
-Then run it (and install it as a service so it starts with Windows):
-
-```powershell
-cloudflared tunnel run userrepair
-cloudflared service install
-```
-
-Set **Public address** to `https://sms.yourshop.com` in Settings, so your stable webhooks become `https://sms.yourshop.com/inbound/sms?token=YOUR-TOKEN` and `https://sms.yourshop.com/inbound/email?token=YOUR-TOKEN`. Paste them into Pingram once and you are done.
-
-> The permanent Cloudflare route above needs your domain's nameservers pointed at Cloudflare. If your domain lives on Netlify (or anywhere else) and you do not want to move it, use one of the options below instead - userrepair does not care which tunnel you use, it only needs the public HTTPS URL in the **Public address** box.
-
-### Keeping your domain on Netlify (no nameserver change)
-
-Any of these give a stable public URL without touching your Netlify DNS:
-
-**Option A - ngrok (simplest).** A free ngrok account includes one permanent static domain.
+Make a free account at [ngrok.com](https://ngrok.com), then:
 
 ```powershell
 winget install --id ngrok.ngrok
 ngrok config add-authtoken YOUR-NGROK-TOKEN
-ngrok http 8787 --url https://YOUR-NAME.ngrok-free.app
 ```
 
-Set **Public address** to `https://YOUR-NAME.ngrok-free.app`. To keep it running, install ngrok as a Windows service (`ngrok service install` / `ngrok service start`).
+(Your auth token is on the ngrok dashboard under **Getting Started -> Your Authtoken**.)
 
-**Option B - Tailscale Funnel.** Free, no domain at all - it exposes the PC on a stable `*.ts.net` HTTPS name.
+**2. Claim your free static domain**
+
+A free ngrok account includes **one permanent domain**. Open **[dashboard.ngrok.com/domains](https://dashboard.ngrok.com/domains)**, click **New Domain**, and ngrok assigns you one like `keen-mallard-1234.ngrok-free.app`. Copy that exact name - you cannot make one up (a custom name needs a paid plan).
+
+**3. Start the tunnel**
 
 ```powershell
-winget install --id tailscale.tailscale
-tailscale up
-tailscale funnel 8787
+ngrok http 8787 --url https://keen-mallard-1234.ngrok-free.app
 ```
 
-It prints a URL like `https://your-pc.your-tailnet.ts.net`. Use that as the **Public address** (enable Funnel for the machine in the Tailscale admin if prompted).
+Leave this running. To keep it on across reboots, install it as a Windows service: `ngrok service install` then `ngrok service start`.
 
-**Option C - a Cloudflare subdomain only.** If you want to use your own domain, you do not have to move the whole thing. Add just `sms.yourshop.com` to Cloudflare as its own zone, then at Netlify add `NS` records for `sms` pointing to the two nameservers Cloudflare gives you. The apex and `www` stay on Netlify; only the `sms` subdomain resolves through Cloudflare, so `cloudflared tunnel route dns userrepair sms.yourshop.com` works as in the permanent setup above.
+**4. Point userrepair and Pingram at it**
+
+In userrepair, open **Settings -> Notifications -> Inbound webhook**, set **Public address** to `https://keen-mallard-1234.ngrok-free.app`, optionally click **Generate** for a token, and **Save**. The finished URL shown there becomes:
+
+```
+https://keen-mallard-1234.ngrok-free.app/inbound?token=YOUR-TOKEN
+```
+
+Copy that into Pingram's inbound webhook (it covers both SMS and email). Text or email your shop, and the reply should appear in the Inbox within a few seconds.
+
+**Quick test without a static domain.** To just confirm replies flow, run `ngrok http 8787` with no `--url`. It prints a random `https://xxxx.ngrok-free.app` URL each session - paste that (with `/inbound`) into Public address and Pingram. Handy for a one-off test; use the claimed static domain above for a URL that stays put.
 
 **Notes**
 
 - Keep the **main PC and the tunnel running** during business hours so replies come in.
-- The `token` is the dedicated **inbound webhook token** you set in **Settings -> Notifications** (not your LAN access key); it stops anyone else from posting to your inbox. Leave it blank to accept any caller. The exact webhook URLs are built for you there.
+- The `token` is the dedicated **inbound webhook token** you set in **Settings -> Notifications** (not your LAN access key); it stops anyone else from posting to your inbox. Leave it blank to accept any caller. The exact webhook URL is built for you there.
+- userrepair does not care which tunnel you use - any public HTTPS URL works in the **Public address** box (Cloudflare Tunnel, Tailscale Funnel, etc.). ngrok is recommended only because its free static domain needs no DNS or nameserver changes.
 - This is only for inbound replies. Nothing else about the app touches the internet beyond Square, the update check, and your own email/SMS provider.
 
 ---
@@ -401,7 +356,7 @@ src/                  React + TypeScript frontend
 src-tauri/            Rust backend
   src/db/             migrations.rs + schema.sql + seed_*.sql
   src/commands/       db_tx, square, auth, backup, attachments, camera, update, email, pingram, system, net
-  src/server.rs       embedded LAN host server (axum) for multi-PC mode (DB, /cmd, /capture, /attach, /inbound/sms, /inbound/email)
+  src/server.rs       embedded LAN host server (axum) for multi-PC mode (DB, /cmd, /capture, /attach, /inbound)
   capabilities/       Tauri 2 ACL
 scripts/              icon + catalog generators
 plugins/              example plugin manifest

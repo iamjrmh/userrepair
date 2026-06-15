@@ -136,8 +136,8 @@ function NotificationsSettings() {
     ? d.publicBaseUrl.trim().replace(/\/+$/, "")
     : `http://${lanHost}:${getNetConfig().port || DEFAULT_PORT}`;
   const tokenPart = d.inboundToken.trim() ? `?token=${encodeURIComponent(d.inboundToken.trim())}` : "";
-  const webhookSms = `${webhookBase}/inbound/sms${tokenPart}`;
-  const webhookEmail = `${webhookBase}/inbound/email${tokenPart}`;
+  // Pingram uses one inbound webhook for both SMS and email.
+  const webhookUrl = `${webhookBase}/inbound${tokenPart}`;
 
   function set<K extends keyof SmtpConfig>(k: K, v: SmtpConfig[K]) {
     setDraft((prev) => (prev ? { ...prev, [k]: v } : prev));
@@ -302,7 +302,7 @@ function NotificationsSettings() {
           </div>
 
           <div className="space-y-1.5">
-            <Label>Inbound webhooks (for the Inbox)</Label>
+            <Label>Inbound webhook (for the Inbox)</Label>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs font-normal text-muted-foreground">Public address (optional)</Label>
@@ -316,10 +316,9 @@ function NotificationsSettings() {
                 </div>
               </div>
             </div>
-            <Input readOnly value={webhookSms} className="mt-1.5 font-mono text-[11px]" onFocus={(e) => e.currentTarget.select()} />
-            <Input readOnly value={webhookEmail} className="mt-1.5 font-mono text-[11px]" onFocus={(e) => e.currentTarget.select()} />
+            <Input readOnly value={webhookUrl} className="mt-1.5 font-mono text-[11px]" onFocus={(e) => e.currentTarget.select()} />
             <p className="text-[11px] text-muted-foreground">
-              Paste the first into Pingram&apos;s SMS inbound webhook and the second into the Email inbound webhook, so customer replies land in the Inbox (Manager+). Set a <strong>Public address</strong> (e.g. your free Cloudflare Tunnel URL) so Pingram can reach this PC over the internet, and the URLs above update to match. The token is a dedicated secret for these webhooks (separate from the LAN access key); leave it blank to accept any caller. <strong>Save</strong> after changing either.
+              Paste this single URL into Pingram&apos;s inbound webhook - it handles both SMS and email replies, which land in the Inbox (Manager+). Set a <strong>Public address</strong> (e.g. your free Cloudflare Tunnel URL) so Pingram can reach this PC over the internet, and the URL above updates to match. The token is a dedicated secret for the webhook (separate from the LAN access key); leave it blank to accept any caller. <strong>Save</strong> after changing either.
             </p>
           </div>
 
