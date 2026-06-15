@@ -299,10 +299,38 @@ cloudflared service install
 
 Set **Public address** to `https://sms.yourshop.com` in Settings, so your stable webhooks become `https://sms.yourshop.com/inbound/sms?token=YOUR-TOKEN` and `https://sms.yourshop.com/inbound/email?token=YOUR-TOKEN`. Paste them into Pingram once and you are done.
 
+> The permanent Cloudflare route above needs your domain's nameservers pointed at Cloudflare. If your domain lives on Netlify (or anywhere else) and you do not want to move it, use one of the options below instead - userrepair does not care which tunnel you use, it only needs the public HTTPS URL in the **Public address** box.
+
+### Keeping your domain on Netlify (no nameserver change)
+
+Any of these give a stable public URL without touching your Netlify DNS:
+
+**Option A - ngrok (simplest).** A free ngrok account includes one permanent static domain.
+
+```powershell
+winget install --id ngrok.ngrok
+ngrok config add-authtoken YOUR-NGROK-TOKEN
+ngrok http 8787 --url https://YOUR-NAME.ngrok-free.app
+```
+
+Set **Public address** to `https://YOUR-NAME.ngrok-free.app`. To keep it running, install ngrok as a Windows service (`ngrok service install` / `ngrok service start`).
+
+**Option B - Tailscale Funnel.** Free, no domain at all - it exposes the PC on a stable `*.ts.net` HTTPS name.
+
+```powershell
+winget install --id tailscale.tailscale
+tailscale up
+tailscale funnel 8787
+```
+
+It prints a URL like `https://your-pc.your-tailnet.ts.net`. Use that as the **Public address** (enable Funnel for the machine in the Tailscale admin if prompted).
+
+**Option C - a Cloudflare subdomain only.** If you want to use your own domain, you do not have to move the whole thing. Add just `sms.yourshop.com` to Cloudflare as its own zone, then at Netlify add `NS` records for `sms` pointing to the two nameservers Cloudflare gives you. The apex and `www` stay on Netlify; only the `sms` subdomain resolves through Cloudflare, so `cloudflared tunnel route dns userrepair sms.yourshop.com` works as in the permanent setup above.
+
 **Notes**
 
 - Keep the **main PC and the tunnel running** during business hours so replies come in.
-- The `token` is your **network access key** (Settings -> Network); it stops anyone else from posting to your inbox. The exact webhook URL is shown for you in **Settings -> Notifications**.
+- The `token` is the dedicated **inbound webhook token** you set in **Settings -> Notifications** (not your LAN access key); it stops anyone else from posting to your inbox. Leave it blank to accept any caller. The exact webhook URLs are built for you there.
 - This is only for inbound replies. Nothing else about the app touches the internet beyond Square, the update check, and your own email/SMS provider.
 
 ---

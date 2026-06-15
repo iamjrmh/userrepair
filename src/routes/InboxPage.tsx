@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Inbox as InboxIcon, RefreshCw, Trash2, Send, CheckCheck, Clock, User } from "lucide-react";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -11,35 +11,70 @@ import { useAsync } from "@/hooks/useAsync";
 import { cn } from "@/lib/utils";
 import {
   listInboxMessages,
-  markInboxRead,
+  markContactRead,
   markAllInboxRead,
-  deleteInboxMessage,
+  deleteContact,
+  addOutboundReply,
   type InboxMessage,
 } from "@/lib/repos/inbox";
 import { sendInboxReply } from "@/lib/email";
 import { broadcastChange } from "@/lib/sync";
 import { formatRelative, formatDateTime } from "@/lib/format";
 
+/** One contact's full back-and-forth thread, newest activity first. */
+interface Conversation {
+  contact: string; // phone (+1...) or email - the grouping key
+  channel: string;
+  name: string | null;
+  customerId: number | null;
+  messages: InboxMessage[]; // ascending by time
+  lastAt: string;
+  unread: number;
+}
+
+/** Group the flat message log into per-contact conversations. */
+function buildConversations(messages: InboxMessage[]): Conversation[] {
+  const byContact = new Map<string, InboxMessage[]>();
+  for (const m of messages) {
+    const list = byContact.get(m.from_addr);
+    if (list) list.push(m);
+    else byContact.set(m.from_addr, [m]);
+  }
+  const convos: Conversation[] = [];
+  for (const [contact, msgs] of byContact) {
+    const asc = [...msgs].sort((a, b) => a.created_at.localeCompare(b.created_at));
+    const lastInboundNamed = [...asc].reverse().find((m) => m.direction === "in" && m.from_name);
+    convos.push({
+      contact,
+      channel: asc[asc.length - 1]?.channel ?? "sms",
+      name: lastInboundNamed?.from_name ?? null,
+      customerId: asc.find((m) => m.customer_id != null)?.customer_id ?? null,
+      messages: asc,
+      lastAt: asc[asc.length - 1]?.created_at ?? "",
+      unread: asc.filter((m) => m.direction === "in" && m.is_read === 0).length,
+    });
+  }
+  return convos.sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+}
+
 export default function InboxPage() {
   const { data, loading, reload } = useAsync(listInboxMessages, []);
-  const messages = data ?? [];
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const conversations = useMemo(() => buildConversations(data ?? []), [data]);
+  const [selectedContact, setSelectedContact] = useState<string | null>(null);
+  const selected = conversations.find((c) => c.contact === selectedContact) ?? null;
+  const unread = conversations.reduce((n, c) => n + c.unread, 0);
 
-  // Inbound replies arrive via the webhook into the database, so poll for new
-  // ones while the Inbox is open (no manual refresh needed). A rev bump does a
-  // background refresh, keeping the list on screen instead of flashing a skeleton.
+  // Replies arrive via the webhook into the database, so poll while open. A rev
+  // bump does a background refresh, keeping the thread on screen (no skeleton).
   useEffect(() => {
     const t = setInterval(() => broadcastChange(), 12000);
     return () => clearInterval(t);
   }, []);
 
-  const selected = messages.find((m) => m.id === selectedId) ?? null;
-  const unread = messages.filter((m) => m.is_read === 0).length;
-
-  async function selectMessage(m: InboxMessage) {
-    setSelectedId(m.id);
-    if (m.is_read === 0) {
-      await markInboxRead(m.id);
+  async function selectConversation(c: Conversation) {
+    setSelectedContact(c.contact);
+    if (c.unread > 0) {
+      await markContactRead(c.contact);
       reload();
     }
   }
@@ -63,41 +98,42 @@ export default function InboxPage() {
         {/* Conversation list */}
         <div className="flex w-80 shrink-0 flex-col border-r border-border">
           <div className="flex items-center gap-2 border-b border-border px-4 py-3 text-sm font-semibold">
-            Messages
+            Conversations
             {unread > 0 && <Badge variant="default" className="ml-auto">{unread} new</Badge>}
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
-            {loading ? (
+            {loading && conversations.length === 0 ? (
               <div className="p-4 text-sm text-muted-foreground">Loading...</div>
-            ) : messages.length === 0 ? (
+            ) : conversations.length === 0 ? (
               <div className="p-6 text-center text-sm text-muted-foreground">No replies yet.</div>
             ) : (
-              messages.map((m) => {
-                const isUnread = m.is_read === 0;
+              conversations.map((c) => {
+                const last = c.messages[c.messages.length - 1];
+                const isUnread = c.unread > 0;
                 return (
                   <button
-                    key={m.id}
+                    key={c.contact}
                     type="button"
-                    onClick={() => void selectMessage(m)}
+                    onClick={() => void selectConversation(c)}
                     className={cn(
                       "flex w-full flex-col gap-0.5 border-b border-border/70 px-4 py-3 text-left transition-colors hover:bg-muted/50 focus:outline-none focus-visible:bg-muted/60 cursor-pointer",
-                      selectedId === m.id && "bg-muted",
+                      selectedContact === c.contact && "bg-muted",
                     )}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="flex min-w-0 items-center gap-2">
                         {isUnread && <span className="h-2 w-2 shrink-0 rounded-full bg-primary" aria-label="Unread" />}
                         <span className={cn("truncate text-sm", isUnread ? "font-semibold text-foreground" : "font-medium text-foreground/90")}>
-                          {m.from_name ?? m.from_addr}
+                          {c.name ?? c.contact}
                         </span>
                         <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                          {m.channel === "email" ? "Email" : "SMS"}
+                          {c.channel === "email" ? "Email" : "SMS"}
                         </Badge>
                       </span>
-                      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{formatRelative(m.created_at)}</span>
+                      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{formatRelative(c.lastAt)}</span>
                     </div>
                     <span className={cn("truncate pl-0 text-xs", isUnread ? "text-foreground/80" : "text-muted-foreground")}>
-                      {m.body}
+                      {last?.direction === "out" ? "You: " : ""}{last?.body}
                     </span>
                   </button>
                 );
@@ -109,13 +145,13 @@ export default function InboxPage() {
         {/* Reading pane */}
         <div className="flex min-w-0 flex-1 flex-col">
           {selected ? (
-            <ReadingPane message={selected} onChanged={reload} />
+            <ReadingPane conversation={selected} onChanged={reload} onDeleted={() => setSelectedContact(null)} />
           ) : (
             <div className="flex h-full items-center justify-center p-6">
               <EmptyState
                 icon={InboxIcon}
-                title={messages.length === 0 ? "No replies yet" : "Select a message"}
-                description={messages.length === 0 ? "When a customer texts back, their reply shows up here." : "Pick a conversation on the left to read and reply."}
+                title={conversations.length === 0 ? "No replies yet" : "Select a conversation"}
+                description={conversations.length === 0 ? "When a customer texts or emails back, it shows up here." : "Pick a conversation on the left to read and reply."}
               />
             </div>
           )}
@@ -125,18 +161,28 @@ export default function InboxPage() {
   );
 }
 
-function ReadingPane({ message, onChanged }: { message: InboxMessage; onChanged: () => void }) {
+function ReadingPane({
+  conversation,
+  onChanged,
+  onDeleted,
+}: {
+  conversation: Conversation;
+  onChanged: () => void;
+  onDeleted: () => void;
+}) {
   const navigate = useNavigate();
   const [reply, setReply] = useState("");
   const [sending, setSending] = useState(false);
-  const name = message.from_name ?? message.from_addr;
+  const name = conversation.name ?? conversation.contact;
+  const isEmail = conversation.channel === "email";
 
   async function send() {
-    if (!reply.trim()) return;
+    const text = reply.trim();
+    if (!text) return;
     setSending(true);
     try {
-      await sendInboxReply(message.channel, message.from_addr, reply.trim());
-      toast.success("Reply sent");
+      await sendInboxReply(conversation.channel, conversation.contact, text);
+      await addOutboundReply(conversation.channel, conversation.contact, conversation.customerId, text);
       setReply("");
       onChanged();
     } catch (e) {
@@ -153,12 +199,12 @@ function ReadingPane({ message, onChanged }: { message: InboxMessage; onChanged:
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold text-foreground">{name}</div>
           <div className="truncate text-xs text-muted-foreground">
-            {message.from_name ? `${message.from_addr} . ` : ""}{formatDateTime(message.created_at)}
+            {conversation.name ? `${conversation.contact} . ` : ""}{isEmail ? "Email" : "Text"}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          {message.customer_id && (
-            <Button variant="ghost" size="sm" onClick={() => navigate(`/customers/${message.customer_id}`)}>
+          {conversation.customerId && (
+            <Button variant="ghost" size="sm" onClick={() => navigate(`/customers/${conversation.customerId}`)}>
               <User /> Customer
             </Button>
           )}
@@ -166,27 +212,43 @@ function ReadingPane({ message, onChanged }: { message: InboxMessage; onChanged:
             variant="ghost"
             size="icon-sm"
             className="text-muted-foreground hover:text-destructive"
-            onClick={async () => { await deleteInboxMessage(message.id); onChanged(); }}
-            aria-label="Delete message"
+            onClick={async () => { await deleteContact(conversation.contact); onDeleted(); onChanged(); }}
+            aria-label="Delete conversation"
           >
             <Trash2 />
           </Button>
         </div>
       </div>
 
-      {/* Message body */}
-      <div className="min-h-0 flex-1 overflow-y-auto p-5">
-        <div className="max-w-lg rounded-2xl rounded-tl-sm border border-border bg-muted/40 px-4 py-3 text-sm leading-relaxed text-foreground whitespace-pre-wrap">
-          {message.body}
-        </div>
-        <div className="mt-1.5 text-[11px] text-muted-foreground">{formatRelative(message.created_at)}</div>
+      {/* Thread */}
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
+        {conversation.messages.map((m) => {
+          const out = m.direction === "out";
+          return (
+            <div key={m.id} className={cn("flex flex-col", out ? "items-end" : "items-start")}>
+              <div
+                className={cn(
+                  "max-w-lg whitespace-pre-wrap px-4 py-3 text-sm leading-relaxed",
+                  out
+                    ? "rounded-2xl rounded-tr-sm bg-primary text-primary-foreground"
+                    : "rounded-2xl rounded-tl-sm border border-border bg-muted/40 text-foreground",
+                )}
+              >
+                {m.body}
+              </div>
+              <div className="mt-1 px-1 text-[11px] text-muted-foreground">
+                {out ? "You" : name} . {formatDateTime(m.created_at)}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       {/* Composer */}
       <div className="space-y-2 border-t border-border p-3">
         <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
           <Clock className="h-3 w-3 shrink-0" />
-          {message.channel === "email"
+          {isEmail
             ? "Replies are sent as an email from your account's address."
             : "Replies are sent as a real text from your shop number right away."}
         </div>

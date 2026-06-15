@@ -123,5 +123,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("0019_outbox_pingram.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 20,
+            description: "inbox message direction (in/out) for two-way threads",
+            sql: include_str!("0020_inbox_direction.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
