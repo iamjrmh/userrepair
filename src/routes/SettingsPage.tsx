@@ -40,6 +40,7 @@ import { fileToLogoDataUrl } from "@/lib/image";
 import { callCommand, getNetConfig, getLanIp, checkHost, clearNetConfig, DEFAULT_PORT } from "@/lib/net";
 import { sampleReceipt } from "@/lib/receipt";
 import { ReceiptPreviewDialog } from "@/components/receipt/ReceiptPreviewDialog";
+import { AddressAutocomplete } from "@/components/shared/AddressAutocomplete";
 import { loadSmtpConfig, sendTestEmail, NOTIFIABLE_STATUSES, type SmtpConfig } from "@/lib/email";
 import { ROLE_LABEL } from "@/lib/roles";
 import { formatBasisPoints, dollarsToCents } from "@/lib/format";
@@ -313,7 +314,7 @@ function GeneralSettings() {
         <CardContent className="space-y-3">
           <LogoSetting />
           <Field label="Shop name" value={get("shop.name")} onChange={(v) => setField("shop.name", v)} />
-          <Field label="Address" value={get("shop.address")} onChange={(v) => setField("shop.address", v)} />
+          <AddressAutocomplete label="Address" value={get("shop.address")} onChange={(v) => setField("shop.address", v)} />
           <Field label="Phone" value={get("shop.phone")} onChange={(v) => setField("shop.phone", v)} />
           <Field label="Email" value={get("shop.email")} onChange={(v) => setField("shop.email", v)} />
         </CardContent>

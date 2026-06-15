@@ -177,27 +177,40 @@ pub async fn install_update(
     std::fs::write(&dest, &bytes).map_err(|e| format!("write installer: {e}"))?;
     let dest_str = dest.display().to_string();
 
-    // Launch the installer silently so there is no wizard to click through. The
-    // app quits right after, freeing the binary for the installer to replace.
+    // Install silently (no wizard) and relaunch the app afterwards. A silent
+    // NSIS / MSI install does not restart the app on its own, so a detached shell
+    // helper waits ~2s for this app to exit, runs the installer, then starts the
+    // freshly installed binary back up.
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
         const DETACHED_PROCESS: u32 = 0x0000_0008;
-        if asset_name.to_lowercase().ends_with(".msi") {
-            // MSI has to be driven by msiexec to install silently.
-            std::process::Command::new("msiexec")
-                .args(["/i", &dest_str, "/qn", "/norestart"])
-                .creation_flags(DETACHED_PROCESS)
-                .spawn()
-                .map_err(|e| format!("spawn msiexec: {e}"))?;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+        let app_exe = std::env::current_exe()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        let install_cmd = if asset_name.to_lowercase().ends_with(".msi") {
+            format!("start \"\" /wait msiexec /i \"{dest_str}\" /qn /norestart")
         } else {
-            // NSIS setup: /S runs a fully silent install (no UI).
-            std::process::Command::new(&dest)
-                .arg("/S")
-                .creation_flags(DETACHED_PROCESS)
-                .spawn()
-                .map_err(|e| format!("spawn installer: {e}"))?;
-        }
+            // NSIS setup: /S is a fully silent install.
+            format!("start \"\" /wait \"{dest_str}\" /S")
+        };
+        let relaunch = if app_exe.is_empty() {
+            String::new()
+        } else {
+            format!(" & start \"\" \"{app_exe}\"")
+        };
+        // ping is a console-safe ~2s sleep so the app is fully closed before the
+        // installer replaces its binary.
+        let line = format!("/C ping -n 3 127.0.0.1 >nul & {install_cmd}{relaunch}");
+
+        std::process::Command::new("cmd")
+            .raw_arg(&line)
+            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("spawn installer: {e}"))?;
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -206,14 +219,12 @@ pub async fn install_update(
             .map_err(|e| format!("spawn installer: {e}"))?;
     }
 
-    // Give the installer a moment to start, then quit so the binary is free.
+    // Quit so the installer can replace the binary; the helper relaunches us.
     let app_clone = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(900));
+        std::thread::sleep(std::time::Duration::from_millis(700));
         app_clone.exit(0);
     });
 
-    Ok(DownloadResult {
-        path: dest.display().to_string(),
-    })
+    Ok(DownloadResult { path: dest_str })
 }
