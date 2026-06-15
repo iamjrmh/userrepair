@@ -111,5 +111,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("0017_outbox_is_html.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 18,
+            description: "inbox for inbound SMS replies (Pingram webhook)",
+            sql: include_str!("0018_inbox.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

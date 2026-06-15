@@ -78,6 +78,7 @@ pub async fn run_server(app: AppHandle, port: u16, key: String) -> Result<(), St
         .route("/cmd", post(cmd))
         .route("/capture", post(capture))
         .route("/attach", post(attach))
+        .route("/inbound/sms", post(inbound_sms))
         // Captures and recordings can be large; lift axum's small default limit.
         .layer(DefaultBodyLimit::max(512 * 1024 * 1024))
         .with_state(state);
@@ -284,6 +285,75 @@ async fn attach(
         Ok(id) => Json(json!({ "ok": true, "id": id })),
         Err(e) => Json(json!({ "error": e })),
     }
+}
+
+/// Receive an inbound SMS reply from Pingram's webhook and store it in the inbox.
+/// Token-gated via `?token=` when the host has an access key. Pingram's payload
+/// field names vary, so the sender and text are picked defensively.
+async fn inbound_sms(
+    State(state): State<Arc<ServerState>>,
+    Query(q): Query<HashMap<String, String>>,
+    Json(body): Json<Value>,
+) -> Json<Value> {
+    if !state.key.is_empty() && q.get("token").map(String::as_str) != Some(state.key.as_str()) {
+        return unauthorized();
+    }
+
+    let pick = |keys: &[&str]| -> String {
+        for k in keys {
+            if let Some(s) = body.get(*k).and_then(|v| v.as_str()) {
+                if !s.is_empty() {
+                    return s.to_string();
+                }
+            }
+        }
+        String::new()
+    };
+    let from = pick(&["from", "sender", "number", "fromNumber", "source", "msisdn"]);
+    let mut text = pick(&["text", "message", "body", "content", "sms"]);
+    if text.is_empty() {
+        text = body.to_string();
+    }
+
+    // Match a customer by the last 10 digits of the sender's number.
+    let digits: String = from.chars().filter(|c| c.is_ascii_digit()).collect();
+    let last10 = if digits.len() >= 10 {
+        digits[digits.len() - 10..].to_string()
+    } else {
+        String::new()
+    };
+    let mut cust_id: Option<i64> = None;
+    let mut cust_name: Option<String> = None;
+    if last10.len() == 10 {
+        if let Ok(rows) = sqlx::query(
+            "SELECT id, name, phone FROM customers WHERE deleted_at IS NULL AND phone IS NOT NULL",
+        )
+        .fetch_all(&state.pool)
+        .await
+        {
+            for r in rows {
+                let phone: String = r.try_get("phone").unwrap_or_default();
+                let pd: String = phone.chars().filter(|c| c.is_ascii_digit()).collect();
+                if pd.len() >= 10 && pd.ends_with(&last10) {
+                    cust_id = r.try_get::<i64, _>("id").ok();
+                    cust_name = r.try_get::<String, _>("name").ok();
+                    break;
+                }
+            }
+        }
+    }
+
+    let _ = sqlx::query(
+        "INSERT INTO inbox_messages (channel, from_addr, from_name, customer_id, body) VALUES ('sms', ?1, ?2, ?3, ?4)",
+    )
+    .bind(&from)
+    .bind(&cust_name)
+    .bind(cust_id)
+    .bind(&text)
+    .execute(&state.pool)
+    .await;
+
+    Json(json!({ "ok": true }))
 }
 
 /// Hash, store (content-deduped), and link an attachment to a ticket on the host.

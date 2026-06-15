@@ -17,6 +17,7 @@ const TicketDetailPage = lazy(() => import("@/routes/TicketDetailPage"));
 const CustomersPage = lazy(() => import("@/routes/CustomersPage"));
 const CustomerDetailPage = lazy(() => import("@/routes/CustomerDetailPage"));
 const DevicesPage = lazy(() => import("@/routes/DevicesPage"));
+const InboxPage = lazy(() => import("@/routes/InboxPage"));
 const InventoryPage = lazy(() => import("@/routes/InventoryPage"));
 const DonorsPage = lazy(() => import("@/routes/DonorsPage"));
 const MicrosolderingPage = lazy(() => import("@/routes/MicrosolderingPage"));
@@ -86,6 +87,7 @@ export default function App() {
           <Route path="customers" element={<Protected path="/customers"><CustomersPage /></Protected>} />
           <Route path="customers/:id" element={<Protected path="/customers"><CustomerDetailPage /></Protected>} />
           <Route path="devices" element={<Protected path="/devices"><DevicesPage /></Protected>} />
+          <Route path="inbox" element={<Protected path="/inbox"><InboxPage /></Protected>} />
           <Route path="inventory" element={<Protected path="/inventory"><InventoryPage /></Protected>} />
           <Route path="donors" element={<Protected path="/donors"><DonorsPage /></Protected>} />
           <Route path="microsoldering" element={<Protected path="/microsoldering"><MicrosolderingPage /></Protected>} />

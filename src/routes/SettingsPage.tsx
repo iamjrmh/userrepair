@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, type ChangeEvent } from "react";
-import { Plus, Trash2, Save, Plug, Gift, Upload, Network, Copy, Printer, FolderOpen, Camera, Mail } from "lucide-react";
+import { Plus, Trash2, Save, Plug, Gift, Upload, Network, Copy, Printer, FolderOpen, Camera, Mail, MessageSquare } from "lucide-react";
 import { open as openDirectory } from "@tauri-apps/plugin-dialog";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -41,7 +41,7 @@ import { callCommand, getNetConfig, getLanIp, checkHost, clearNetConfig, DEFAULT
 import { sampleReceipt } from "@/lib/receipt";
 import { ReceiptPreviewDialog } from "@/components/receipt/ReceiptPreviewDialog";
 import { AddressAutocomplete } from "@/components/shared/AddressAutocomplete";
-import { loadSmtpConfig, sendTestEmail, sendTestSms, NOTIFIABLE_STATUSES, type SmtpConfig } from "@/lib/email";
+import { loadSmtpConfig, sendTestEmail, sendTestSms, sendTestPingram, NOTIFIABLE_STATUSES, type SmtpConfig } from "@/lib/email";
 import { ROLE_LABEL } from "@/lib/roles";
 import { formatBasisPoints, dollarsToCents } from "@/lib/format";
 import type { ThemeMode, TechRole } from "@/types";
@@ -112,6 +112,8 @@ function NotificationsSettings() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testingSms, setTestingSms] = useState(false);
+  const [testingPingram, setTestingPingram] = useState(false);
+  const [webhookUrl, setWebhookUrl] = useState("");
 
   useEffect(() => {
     if (data && !draft) {
@@ -119,6 +121,14 @@ function NotificationsSettings() {
       setTestTo(data.fromEmail || data.user);
     }
   }, [data, draft]);
+
+  useEffect(() => {
+    const cfg = getNetConfig();
+    const tokenPart = cfg.key ? `?token=${encodeURIComponent(cfg.key)}` : "";
+    void getLanIp()
+      .then((ip) => setWebhookUrl(`http://${ip}:${cfg.port || DEFAULT_PORT}/inbound/sms${tokenPart}`))
+      .catch(() => setWebhookUrl(`http://YOUR-MAIN-PC:${cfg.port || DEFAULT_PORT}/inbound/sms${tokenPart}`));
+  }, []);
 
   if (!draft) return <div className="text-sm text-muted-foreground">Loading...</div>;
   const d = draft;
@@ -139,6 +149,10 @@ function NotificationsSettings() {
     try {
       await setSetting("notify.enabled", d.enabled);
       await setSetting("notify.sms_enabled", d.smsEnabled);
+      await setSetting("notify.pingram_enabled", d.pingramEnabled);
+      await setSetting("notify.pingram_api_key", d.pingramApiKey.trim());
+      await setSetting("notify.pingram_type", (d.pingramType || "repair_status_update").trim());
+      await setSetting("notify.pingram_base_url", (d.pingramBaseUrl || "https://api.pingram.io").trim());
       await setSetting("notify.smtp_host", d.host.trim());
       await setSetting("notify.smtp_port", Number(d.port) || 587);
       await setSetting("notify.smtp_user", d.user.trim());
@@ -170,11 +184,24 @@ function NotificationsSettings() {
     setTestingSms(true);
     try {
       const n = await sendTestSms(d, testPhone.trim());
-      toast.success(`Test text sent to ${n} carrier gateways for ${testPhone.trim()}`);
+      toast.success(`Backup text sent to ${n} carrier gateways for ${testPhone.trim()}`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not send the test text");
     } finally {
       setTestingSms(false);
+    }
+  }
+
+  async function testPingram() {
+    if (testPhone.replace(/\D/g, "").length < 10) { toast.error("Enter a 10-digit mobile number"); return; }
+    setTestingPingram(true);
+    try {
+      await sendTestPingram(d, testPhone.trim());
+      toast.success(`Test text sent via Pingram to ${testPhone.trim()}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not send the test text");
+    } finally {
+      setTestingPingram(false);
     }
   }
 
@@ -227,16 +254,43 @@ function NotificationsSettings() {
         </div>
 
         <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-3">
-          <label className="flex items-center gap-2 text-sm font-medium">
-            <Switch checked={d.smsEnabled} onCheckedChange={(v) => set("smsEnabled", v)} />
-            Also text customers (free, via carrier email-to-SMS)
+          <div className="flex items-center gap-2 text-sm font-medium"><MessageSquare className="h-4 w-4" /> Text messages</div>
+          <label className="flex items-center gap-2 text-sm">
+            <Switch checked={d.pingramEnabled} onCheckedChange={(v) => set("pingramEnabled", v)} />
+            Text customers via Pingram (real SMS)
           </label>
           <p className="text-xs text-muted-foreground">
-            Texts only customers whose preferred contact is set to SMS on their account. Uses the same email setup above and sprays the message to every major US and Canada carrier gateway, so only the customer's real carrier delivers it - no carrier lookup needed. It is best-effort (no delivery receipt) and counts against your email provider's daily send limit.
+            Sends real carrier texts through Pingram to customers whose preferred contact is set to SMS. In Pingram, create a notification of type <code className="rounded bg-muted px-1">repair_status_update</code> with the SMS channel enabled, then paste your API key below. Pingram handles the A2P 10DLC carrier registration.
           </p>
+          <div className="space-y-1.5"><Label>API key</Label><Input type="password" value={d.pingramApiKey} onChange={(e) => set("pingramApiKey", e.target.value)} placeholder="pingram_sk_..." /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5"><Label>Notification type</Label><Input value={d.pingramType} onChange={(e) => set("pingramType", e.target.value)} placeholder="repair_status_update" /></div>
+            <div className="space-y-1.5"><Label>API URL</Label><Input value={d.pingramBaseUrl} onChange={(e) => set("pingramBaseUrl", e.target.value)} placeholder="https://api.pingram.io" /></div>
+          </div>
           <div className="flex items-end gap-2">
             <div className="flex-1 space-y-1.5"><Label>Send a test text to</Label><Input value={testPhone} onChange={(e) => setTestPhone(e.target.value)} placeholder="555-123-4567" /></div>
-            <Button variant="outline" onClick={testSms} disabled={testingSms}>{testingSms ? "Sending..." : "Send test text"}</Button>
+            <Button variant="outline" onClick={testPingram} disabled={testingPingram}>{testingPingram ? "Sending..." : "Send test (Pingram)"}</Button>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Inbound webhook (for the Inbox)</Label>
+            <Input readOnly value={webhookUrl} className="font-mono text-[11px]" onFocus={(e) => e.currentTarget.select()} />
+            <p className="text-[11px] text-muted-foreground">
+              Paste this into Pingram&apos;s &quot;Enable SMS inbound webhook&quot; so customer replies land in the Inbox (Manager+). This is your main PC&apos;s local address; for Pingram to reach it over the internet, expose your main PC publicly (e.g. a free Cloudflare Tunnel) and use that public URL with the same /inbound/sms path and token.
+            </p>
+          </div>
+
+          <div className="space-y-2 border-t border-border pt-3">
+            <label className="flex items-center gap-2 text-sm">
+              <Switch checked={d.smsEnabled} onCheckedChange={(v) => set("smsEnabled", v)} />
+              Enable email-to-SMS backup
+            </label>
+            <p className="text-xs text-muted-foreground">
+              If Pingram is off or a text fails, fall back to the free carrier email-to-SMS gateways. Best-effort and offline-tolerant, but no delivery receipt and some carriers (AT&T) often block it.
+            </p>
+            <div className="flex justify-end">
+              <Button variant="ghost" size="sm" onClick={testSms} disabled={testingSms}>{testingSms ? "Sending..." : "Test backup"}</Button>
+            </div>
           </div>
         </div>
         <p className="text-xs text-muted-foreground">Only customers with an email on file are notified, and sending needs an internet connection.</p>

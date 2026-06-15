@@ -71,6 +71,7 @@ Built with **Tauri 2 (Rust)** + **React + TypeScript**.
 | **Tickets** | Drag-and-drop board, full status flow, timeline, notes, parts that deduct stock, labor by the hour, **edit locks** so two PCs never clash on the same ticket, and a **photos & captures** gallery |
 | **Customers** | Profiles, device + repair history, lifetime value, duplicate detection, tags, rewards balance |
 | **Devices** | Brand / model / model-number, IMEI check, per-model repair history |
+| **Inbox** | A Manager-only two-pane inbox of customer text replies, matched to their profile, with one-click reply by real text |
 | **Inventory** | Locations, suppliers, low-stock alerts, audit log, **in-place editing**, **duplicate an item**, and a **printable barcode label** per item |
 | **Microscope** | Live USB microscope feed with zoom, **drag-to-pan**, mirror / flip, fullscreen, **pop-out** to another monitor, and **photo / video capture** saved to a folder (sent to the main PC on a LAN) |
 | **Board tools** | Board-level **measurements** and known-good values, test-point / net / component indices, and **attach / open a boardview file** per revision (your own licensed files or free open-hardware designs) |
@@ -88,7 +89,7 @@ Built with **Tauri 2 (Rust)** + **React + TypeScript**.
 - **Financial**: revenue / expense, P&L, invoices. **Reporting** shows inventory value and inventory sale total (with the margin between), throughput, and most-failed components, all with CSV export.
 - **Multi-PC**: run it on several computers in the shop, all sharing one machine's data over the LAN, with **live refresh** and **automatic reconnect**.
 - **In-app updates**: a top-bar button checks for a new version on launch and on demand, shows a dot when one is ready, and installs it silently when you choose to. No auto-update.
-- **Customer notifications**: email customers a polished status update (with a repair-progress stepper) as their repair moves forward, through your own SMTP provider, plus **free email-to-SMS texts** for customers whose preferred contact is SMS. Queued and retried if the internet is down.
+- **Customer notifications**: email customers a polished status update (with a repair-progress stepper) as their repair moves forward, through your own SMTP provider, plus **real text messages** via Pingram (with free email-to-SMS as a backup) for customers whose preferred contact is SMS. A **Manager Inbox** shows their replies so you can text back. Queued and retried if the internet is down.
 - **Extras**: global search (`Ctrl+K`), backup and restore, your own logo, dark mode, plugin foundation.
 
 ---
@@ -162,7 +163,7 @@ Everything is under **Settings**:
   Includes a manual refund tool. Refunds over a set amount require manager approval.
 - **Receipt** - choose 58mm or 80mm paper, set a footer message, and print a test receipt.
 - **Rewards** - turn the program on and set points-per-dollar and redemption value.
-- **Notifications** - email customers on status changes via your own SMTP (Gmail works with an app password); choose which statuses notify and send a test. Optional free **email-to-SMS** texts go out to customers whose preferred contact is SMS, sprayed to the major US/Canada carrier gateways so no carrier lookup is needed.
+- **Notifications** - email customers on status changes via your own SMTP (Gmail works with an app password); choose which statuses notify and send a test. **Text messages** go out via **Pingram** (real carrier SMS, it handles A2P 10DLC) to customers whose preferred contact is SMS, with a free **email-to-SMS** fallback. Replies arrive in the **Inbox** (Manager+) when you point Pingram's inbound webhook at your main PC (see [Receiving text replies](#receiving-text-replies-cloudflare-tunnel)).
 - **Network** - see this PC's role (standalone / main / client) and connection details.
 - **Bench** - set the folder where microscope photos and recordings are saved (on a multi-PC setup, every PC's captures are sent to this folder on the main PC).
 - **Staff** - create accounts, reset passwords, deactivate.
@@ -214,6 +215,88 @@ A few things to know:
 - Set an **access key** on the main PC so only your computers can connect.
 - **Microscope captures** taken on any PC are sent to the capture folder on the **main PC**, so set that folder (Settings -> Bench) to a path that exists on the main PC.
 - You can review or change any PC's role later under **Settings -> Network**.
+
+---
+
+## Setting up text messages (Pingram)
+
+Real carrier texts go out through [Pingram](https://www.pingram.io). One API key is all userrepair needs - there is no Client ID, Client Secret, or Notification ID.
+
+1. Create a Pingram account and add an SMS sender (Pingram handles the A2P 10DLC carrier registration for you).
+2. Create a **notification** named `repair_status_update` and enable its **SMS** channel. userrepair sends the message text inline, so the template body can be left as-is.
+3. Open the **Environments** section of the Pingram dashboard and copy the **API key** (it looks like `pingram_sk_...`).
+4. In userrepair, go to **Settings -> Notifications -> Text messages**, turn on "Text customers via Pingram", and paste:
+   - **API key** - the `pingram_sk_...` key
+   - **Notification type** - `repair_status_update` (or whatever you named it)
+5. Click **Send test (Pingram)** to confirm a text arrives.
+
+Customers are only texted when their **preferred contact** is set to SMS. When a customer texts back, Pingram auto-replies with a short "we got your message" note and the reply lands in the **Inbox** (see below).
+
+---
+
+## Receiving text replies (Cloudflare Tunnel)
+
+Sending texts works on its own. To also receive **replies** in the **Inbox**, Pingram (which lives in the cloud) needs to reach your main PC, and the main PC only listens on your local network. A free **Cloudflare Tunnel** gives your main PC a public HTTPS address without opening any ports.
+
+You only need this for the Inbox. Set it up on the **main PC** (the one running in "This is the main PC" mode).
+
+**1. Install cloudflared**
+
+```powershell
+winget install --id Cloudflare.cloudflared
+```
+
+**2. Quick test (no account, temporary URL)**
+
+This is the fastest way to confirm replies work. The host server runs on port `8787` by default (see Settings -> Notifications for the exact address).
+
+```powershell
+cloudflared tunnel --url http://localhost:8787
+```
+
+It prints a URL like `https://random-words.trycloudflare.com`. Your inbound webhook is that URL plus the path and token shown in **Settings -> Notifications**, for example:
+
+```
+https://random-words.trycloudflare.com/inbound/sms?token=YOUR-ACCESS-KEY
+```
+
+Paste that into Pingram (**SMS -> Inbound -> Enable SMS inbound webhook -> Save**), text your shop number, and the reply should appear in the Inbox. Note: this temporary URL changes every time you restart the command, so it is for testing.
+
+**3. Permanent setup (stable URL, recommended)**
+
+For a URL that survives restarts you need a free Cloudflare account with a domain added to Cloudflare:
+
+```powershell
+cloudflared tunnel login
+cloudflared tunnel create userrepair
+cloudflared tunnel route dns userrepair sms.yourshop.com
+```
+
+Create a config file at `%USERPROFILE%\.cloudflared\config.yml`:
+
+```yaml
+tunnel: userrepair
+credentials-file: C:\Users\YOU\.cloudflared\<tunnel-id>.json
+ingress:
+  - hostname: sms.yourshop.com
+    service: http://localhost:8787
+  - service: http_status:404
+```
+
+Then run it (and install it as a service so it starts with Windows):
+
+```powershell
+cloudflared tunnel run userrepair
+cloudflared service install
+```
+
+Your stable webhook becomes `https://sms.yourshop.com/inbound/sms?token=YOUR-ACCESS-KEY`. Paste that into Pingram once and you are done.
+
+**Notes**
+
+- Keep the **main PC and the tunnel running** during business hours so replies come in.
+- The `token` is your **network access key** (Settings -> Network); it stops anyone else from posting to your inbox. The exact webhook URL is shown for you in **Settings -> Notifications**.
+- This is only for inbound replies. Nothing else about the app touches the internet beyond Square, the update check, and your own email/SMS provider.
 
 ---
 
@@ -282,8 +365,8 @@ src/                  React + TypeScript frontend
   types/              shared types (no any)
 src-tauri/            Rust backend
   src/db/             migrations.rs + schema.sql + seed_*.sql
-  src/commands/       db_tx, square, auth, backup, attachments, camera, update, system, net
-  src/server.rs       embedded LAN host server (axum) for multi-PC mode (DB, /cmd, /capture, /attach)
+  src/commands/       db_tx, square, auth, backup, attachments, camera, update, email, pingram, system, net
+  src/server.rs       embedded LAN host server (axum) for multi-PC mode (DB, /cmd, /capture, /attach, /inbound/sms)
   capabilities/       Tauri 2 ACL
 scripts/              icon + catalog generators
 plugins/              example plugin manifest

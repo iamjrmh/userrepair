@@ -8,6 +8,7 @@ pub mod camera;
 pub mod database;
 pub mod email;
 pub mod net;
+pub mod pingram;
 pub mod square;
 pub mod system;
 pub mod update;

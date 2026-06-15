@@ -18,6 +18,7 @@ import {
   Settings,
   DatabaseBackup,
   Puzzle,
+  Inbox,
   type LucideIcon,
 } from "lucide-react";
 
@@ -38,6 +39,7 @@ export const NAV_ITEMS: NavItem[] = [
   { path: "/tickets", label: "Repair Tickets", icon: Ticket, group: "Operations" },
   { path: "/customers", label: "Customers", icon: Users, group: "Operations" },
   { path: "/devices", label: "Devices", icon: Smartphone, group: "Operations" },
+  { path: "/inbox", label: "Inbox", icon: Inbox, group: "Operations" },
 
   { path: "/inventory", label: "Inventory", icon: Package, group: "Stock" },
   { path: "/donors", label: "Donor Boards", icon: CircuitBoard, group: "Stock" },

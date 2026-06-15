@@ -21,6 +21,7 @@ const MAX_ATTEMPTS = 10;
 
 export interface SmtpConfig {
   enabled: boolean;
+  /** Email-to-SMS carrier-gateway backup. */
   smsEnabled: boolean;
   host: string;
   port: number;
@@ -29,7 +30,17 @@ export interface SmtpConfig {
   fromName: string;
   fromEmail: string;
   statuses: string[];
+  // Pingram (real A2P 10DLC SMS), the primary text channel.
+  pingramEnabled: boolean;
+  /** Server API key (looks like pingram_sk_...). */
+  pingramApiKey: string;
+  /** The notification "type" created in Pingram with an SMS channel enabled. */
+  pingramType: string;
+  pingramBaseUrl: string;
 }
+
+export const PINGRAM_DEFAULT_BASE_URL = "https://api.pingram.io";
+export const PINGRAM_DEFAULT_TYPE = "repair_status_update";
 
 /**
  * Carrier email-to-SMS gateways (US + Canada), de-duplicated to one address per
@@ -94,7 +105,10 @@ export const NOTIFIABLE_STATUSES = [
 ];
 
 export async function loadSmtpConfig(): Promise<SmtpConfig> {
-  const [enabled, smsEnabled, host, port, user, pass, fromName, fromEmail, statuses] = await Promise.all([
+  const [
+    enabled, smsEnabled, host, port, user, pass, fromName, fromEmail, statuses,
+    pingramEnabled, pingramApiKey, pingramType, pingramBaseUrl,
+  ] = await Promise.all([
     getSetting<boolean>("notify.enabled", false),
     getSetting<boolean>("notify.sms_enabled", false),
     getSetting<string>("notify.smtp_host", "smtp.gmail.com"),
@@ -104,8 +118,16 @@ export async function loadSmtpConfig(): Promise<SmtpConfig> {
     getSetting<string>("notify.from_name", ""),
     getSetting<string>("notify.from_email", ""),
     getSetting<string[]>("notify.statuses", DEFAULT_NOTIFY_STATUSES),
+    getSetting<boolean>("notify.pingram_enabled", false),
+    getSetting<string>("notify.pingram_api_key", ""),
+    getSetting<string>("notify.pingram_type", PINGRAM_DEFAULT_TYPE),
+    getSetting<string>("notify.pingram_base_url", PINGRAM_DEFAULT_BASE_URL),
   ]);
-  return { enabled, smsEnabled, host, port: port || 587, user, pass, fromName, fromEmail, statuses };
+  return {
+    enabled, smsEnabled, host, port: port || 587, user, pass, fromName, fromEmail, statuses,
+    pingramEnabled, pingramApiKey, pingramType: pingramType || PINGRAM_DEFAULT_TYPE,
+    pingramBaseUrl: pingramBaseUrl || PINGRAM_DEFAULT_BASE_URL,
+  };
 }
 
 export interface ShopBranding {
@@ -336,21 +358,86 @@ async function sendEmail(cfg: SmtpConfig, to: string, subject: string, body: str
   });
 }
 
-/** Short plain-text version of a status update, for carrier SMS gateways. */
-function buildSmsText(shopName: string, status: string, device: string, ticketNumber: string): string {
-  const map: Record<string, string> = {
-    Intake: `we received your ${device}`,
-    Diagnosed: `we've diagnosed your ${device}`,
-    "Awaiting Parts": `waiting on parts for your ${device}`,
-    "In Repair": `your ${device} repair is underway`,
-    QC: `your ${device} is in final testing`,
-    "Awaiting Pickup": `your ${device} is ready for pickup`,
-    Completed: `your ${device} repair is complete`,
-    Closed: `your ${device} repair is complete`,
-    "Unrepairable (BER)": `an update on your ${device}, please call us`,
+/**
+ * A clean, professional multi-line plain-text status message (no media). Mirrors
+ * the spirit of the email: shop name, a clear sentence, ticket id, the time, and
+ * the shop's address and phone. Used by both Pingram and the email-to-SMS backup.
+ */
+function buildSmsText(shop: ShopBranding, status: string, device: string, ticketNumber: string): string {
+  const sentences: Record<string, string> = {
+    Intake: `We received your ${device} and it is in our queue.`,
+    Diagnosed: `We've diagnosed your ${device} and are moving forward.`,
+    "Awaiting Parts": `We're waiting on parts for your ${device}.`,
+    "In Repair": `Your ${device} repair is underway.`,
+    QC: `Your ${device} is in final testing.`,
+    "Awaiting Pickup": `Your ${device} is repaired and ready for pickup.`,
+    Completed: `Your ${device} repair is complete. Thank you!`,
+    Closed: `Your ${device} repair is complete. Thank you!`,
+    "Unrepairable (BER)": `An update on your ${device} - please give us a call.`,
   };
-  const line = map[status] ?? `your repair status is now ${status}`;
-  return `${shopName}: ${line} (Ticket ${ticketNumber})`;
+  const sentence = sentences[status] ?? `Your repair status is now ${status}.`;
+  const timeLabel =
+    status === "Completed" || status === "Closed"
+      ? "Completed"
+      : status === "Awaiting Pickup"
+        ? "Ready"
+        : "Updated";
+  const time = new Date().toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  const lines = [shop.name, "", sentence, "", `Ticket: ${ticketNumber}`, `${timeLabel}: ${time}`];
+  if (shop.address) lines.push(shop.address);
+  lines.push("");
+  lines.push(
+    shop.phone
+      ? `Questions? Just reply to this text. For anything urgent, call ${shop.phone}.`
+      : "Questions? Just reply to this text and we'll get back to you.",
+  );
+  return lines.join("\n");
+}
+
+/**
+ * The message Pingram auto-sends back the moment a customer replies to an update,
+ * so they're never left wondering whether anyone saw it.
+ */
+function buildAutoReply(shop: ShopBranding): string {
+  const urgent: string[] = [];
+  if (shop.phone) urgent.push(`call ${shop.phone}`);
+  if (shop.email) urgent.push(`email ${shop.email}`);
+  const tail = urgent.length ? ` If it's urgent, ${urgent.join(" or ")}.` : "";
+  return `Thanks for your message! We check these often and will get back to you soon, so please be patient.${tail}`;
+}
+
+/** Reduce a phone string to E.164 (+1XXXXXXXXXX) for US/Canada, or "" if invalid. */
+function normalizePhoneE164(phone: string): string {
+  const d = normalizePhone(phone);
+  return d ? `+1${d}` : "";
+}
+
+/** Send one SMS through Pingram (real A2P 10DLC carrier SMS). */
+async function sendPingramSms(
+  cfg: SmtpConfig,
+  e164: string,
+  message: string,
+  autoReply?: string,
+): Promise<void> {
+  await invoke("send_pingram", {
+    baseUrl: cfg.pingramBaseUrl,
+    apiKey: cfg.pingramApiKey,
+    notificationType: cfg.pingramType,
+    toNumber: e164,
+    message,
+    autoReply: autoReply ?? null,
+  });
+}
+
+/** True when Pingram has everything it needs to send. */
+function pingramReady(cfg: SmtpConfig): boolean {
+  return cfg.pingramEnabled && !!cfg.pingramApiKey && !!cfg.pingramType;
 }
 
 export interface StatusNotifyArgs {
@@ -367,6 +454,7 @@ export interface StatusNotifyArgs {
 export interface NotifyResult {
   sent: boolean;
   queued?: boolean;
+  smsSent?: boolean;
   smsQueued?: boolean;
   reason?: string;
 }
@@ -406,16 +494,36 @@ export async function notifyTicketStatus(args: StatusNotifyArgs): Promise<Notify
     result = ok ? { sent: true } : { sent: false, queued: true, reason: "queued" };
   }
 
-  // SMS channel: only when the customer's preferred contact method is SMS.
-  if (cfg.smsEnabled && args.customerPhone && args.preferredContact === "sms") {
-    const digits = normalizePhone(args.customerPhone);
-    if (digits) {
-      const text = buildSmsText(shop.name, args.status, device, args.ticketNumber);
-      for (const domain of SMS_GATEWAYS) {
-        await enqueueEmail(`${digits}@${domain}`, "", text, false);
+  // Text channel: only when the customer's preferred contact method is SMS.
+  if (args.preferredContact === "sms" && args.customerPhone) {
+    const text = buildSmsText(shop, args.status, device, args.ticketNumber);
+    let smsSent = false;
+
+    // Primary: Pingram (real A2P 10DLC carrier SMS). Carries an auto-reply so a
+    // customer who texts back gets an instant, reassuring acknowledgement.
+    if (pingramReady(cfg)) {
+      const e164 = normalizePhoneE164(args.customerPhone);
+      if (e164) {
+        try {
+          await sendPingramSms(cfg, e164, text, buildAutoReply(shop));
+          smsSent = true;
+          result.smsSent = true;
+        } catch {
+          smsSent = false; // fall through to the backup below
+        }
       }
-      result.smsQueued = true;
-      void flushOutbox(); // send queued texts sequentially, best-effort
+    }
+
+    // Backup: email-to-SMS carrier spray (queued, offline-tolerant).
+    if (!smsSent && cfg.smsEnabled) {
+      const digits = normalizePhone(args.customerPhone);
+      if (digits) {
+        for (const domain of SMS_GATEWAYS) {
+          await enqueueEmail(`${digits}@${domain}`, "", text, false);
+        }
+        result.smsQueued = true;
+        void flushOutbox();
+      }
     }
   }
 
@@ -468,11 +576,31 @@ export async function sendTestEmail(cfg: SmtpConfig, to: string): Promise<void> 
   await sendEmail(cfg, to, `Test email from ${shop.name}`, html, true);
 }
 
-/** Spray a sample text to every carrier gateway for a phone number, to test SMS. */
+/** Send a manager's reply (free text) to a number via Pingram. Used by the Inbox. */
+export async function sendPingramReply(phone: string, message: string): Promise<void> {
+  const cfg = await loadSmtpConfig();
+  if (!pingramReady(cfg)) {
+    throw new Error("Pingram texting is not set up in Settings -> Notifications");
+  }
+  const e164 = normalizePhoneE164(phone);
+  if (!e164) throw new Error("Invalid phone number");
+  await sendPingramSms(cfg, e164, message);
+}
+
+/** Send a sample text via Pingram (real SMS) to verify the Pingram setup. */
+export async function sendTestPingram(cfg: SmtpConfig, phone: string): Promise<void> {
+  const e164 = normalizePhoneE164(phone);
+  if (!e164) throw new Error("Enter a 10-digit US/Canada mobile number");
+  const shop = await loadShopBranding();
+  const text = buildSmsText(shop, "Awaiting Pickup", "iPhone 12", "RS-TEST-0001");
+  await sendPingramSms(cfg, e164, text);
+}
+
+/** Spray a sample text to every carrier gateway for a phone number, to test the email-to-SMS backup. */
 export async function sendTestSms(cfg: SmtpConfig, phone: string): Promise<number> {
   const digits = normalizePhone(phone);
   if (!digits) throw new Error("Enter a 10-digit US/Canada mobile number");
-  const shop = useBrandStore.getState().name;
+  const shop = await loadShopBranding();
   const text = buildSmsText(shop, "Awaiting Pickup", "iPhone 12", "RS-TEST-0001");
   let sent = 0;
   for (const domain of SMS_GATEWAYS) {
