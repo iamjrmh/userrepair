@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Cpu, Plus, FileText, Star, Trash2, Microscope } from "lucide-react";
+import { Cpu, Plus, FileText, Star, Trash2, Microscope, FolderInput } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -41,6 +41,15 @@ import {
   deleteMeasurement,
   type MeasurementRow,
 } from "@/lib/repos/measurements";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { matchFiles, BOARDVIEW_EXTENSIONS, type ScannedFile } from "@/lib/boardviewMatch";
+import { broadcastChange } from "@/lib/sync";
 import type { MeasurementKind } from "@/types";
 
 const KINDS: { value: MeasurementKind; label: string }[] = [
@@ -63,11 +72,51 @@ export default function BoardToolsPage() {
     [selected],
   );
 
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{ attached: number; skipped: number; unmatched: string[] } | null>(null);
+
+  async function importBoardviews() {
+    const dir = await openDialog({ directory: true, multiple: false });
+    if (typeof dir !== "string") return;
+    setImporting(true);
+    try {
+      const files = await invoke<ScannedFile[]>("scan_files", { dir, extensions: BOARDVIEW_EXTENSIONS });
+      const revisions = (await listBoardRevisions()).map((b) => ({ id: b.id, device_model: b.device_model, revision: b.revision }));
+      const { matches, unmatched } = matchFiles(files, revisions);
+
+      let attached = 0;
+      let skipped = 0;
+      const existing = new Map<number, Set<string>>();
+      for (const m of matches) {
+        let names = existing.get(m.boardId);
+        if (!names) {
+          names = new Set((await listBoardAttachments(m.boardId)).map((a) => a.original_name));
+          existing.set(m.boardId, names);
+        }
+        if (names.has(m.file.name)) { skipped++; continue; }
+        try {
+          await addBoardAttachment(m.boardId, m.file.path, m.file.name, "boardview");
+          names.add(m.file.name);
+          attached++;
+        } catch {
+          skipped++;
+        }
+      }
+      setImportResult({ attached, skipped, unmatched: unmatched.map((u) => u.name) });
+      broadcastChange();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Import failed");
+    } finally {
+      setImporting(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Board Tools"
         description="Board-level measurements, known-good values, boardview files, and test-point / net / component indices per board revision."
+        actions={<Button variant="outline" onClick={importBoardviews} disabled={importing}><FolderInput /> {importing ? "Importing..." : "Import boardviews"}</Button>}
       />
 
       <Card>
@@ -113,7 +162,48 @@ export default function BoardToolsPage() {
         </Tabs>
         </>
       )}
+
+      {importResult && (
+        <ImportResultDialog result={importResult} onClose={() => setImportResult(null)} />
+      )}
     </div>
+  );
+}
+
+function ImportResultDialog({
+  result,
+  onClose,
+}: {
+  result: { attached: number; skipped: number; unmatched: string[] };
+  onClose: () => void;
+}) {
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Boardview import</DialogTitle></DialogHeader>
+        <div className="space-y-3 text-sm">
+          <p>
+            <span className="font-semibold text-foreground">{result.attached}</span> attached
+            {result.skipped > 0 ? `, ${result.skipped} already present` : ""}.
+          </p>
+          {result.unmatched.length > 0 ? (
+            <div className="space-y-2">
+              <p className="text-muted-foreground">
+                {result.unmatched.length} file{result.unmatched.length === 1 ? "" : "s"} did not match a board revision. Rename them to include the board number (e.g. 820-01700) or the exact model, then import again.
+              </p>
+              <div className="max-h-48 overflow-y-auto rounded-md border border-border bg-card p-2 font-mono text-xs text-muted-foreground">
+                {result.unmatched.map((n, i) => (
+                  <div key={i} className="truncate" title={n}>{n}</div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <p className="text-muted-foreground">Every file matched a board revision.</p>
+          )}
+        </div>
+        <DialogFooter><Button onClick={onClose}>Done</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "userrepair"
-version = "1.2.1"
+version = "1.2.2"
 description = "Board-level electronics repair shop management."
 authors = ["userrepair"]
 edition = "2021"
@@ -33,6 +33,9 @@ sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
 # POS / Square integration: the one documented place the app talks to the
 # network (the "POS System" plugin's net capability). rustls avoids OpenSSL.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Transactional email for repair-status notifications: SMTP via the shop's own
+# provider (e.g. Gmail with an app password). rustls keeps us off OpenSSL.
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "rustls-tls"] }
 uuid = { version = "1", features = ["v4"] }
 # Password hashing for employee accounts.
 argon2 = "0.5"

@@ -35,6 +35,8 @@ import {
   deleteEstimateItem,
 } from "@/lib/repos/tickets";
 import { getSetting } from "@/lib/repos/settings";
+import { getCustomer } from "@/lib/repos/customers";
+import { notifyTicketStatus } from "@/lib/email";
 import { listItems } from "@/lib/repos/inventory";
 import { listTicketAttachments, deleteTicketAttachment } from "@/lib/repos/attachments";
 import { attachmentUrl } from "@/lib/attachmentUrl";
@@ -83,6 +85,26 @@ export default function TicketDetailPage() {
     await changeStatus(ticketId, ticket.status, to as TicketStatus, ticket.technician_id);
     toast.success(`Status set to ${to}`);
     reload();
+    void notifyCustomer(to);
+  }
+
+  // Best-effort customer email on a status change (no-op unless enabled, the
+  // status is opted in, and the customer has an email on file).
+  async function notifyCustomer(to: string) {
+    try {
+      if (!ticket.customer_id) return;
+      const customer = await getCustomer(ticket.customer_id);
+      const res = await notifyTicketStatus({
+        customerEmail: customer?.email ?? null,
+        customerName: customer?.name ?? "there",
+        ticketNumber: ticket.ticket_number,
+        deviceLabel: ticket.device_label,
+        status: to,
+      });
+      if (res.sent) toast.success(`Emailed ${customer?.name ?? "the customer"} the update`);
+    } catch {
+      toast.error("Status saved, but the email could not be sent");
+    }
   }
 
   async function submitNote() {

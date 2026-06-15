@@ -6,6 +6,7 @@ pub mod auth;
 pub mod backup;
 pub mod camera;
 pub mod database;
+pub mod email;
 pub mod net;
 pub mod square;
 pub mod system;

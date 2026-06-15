@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, type ChangeEvent } from "react";
-import { Plus, Trash2, Save, Plug, Gift, Upload, Network, Copy, Printer, FolderOpen, Camera } from "lucide-react";
+import { Plus, Trash2, Save, Plug, Gift, Upload, Network, Copy, Printer, FolderOpen, Camera, Mail } from "lucide-react";
 import { open as openDirectory } from "@tauri-apps/plugin-dialog";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -40,6 +40,7 @@ import { fileToLogoDataUrl } from "@/lib/image";
 import { callCommand, getNetConfig, getLanIp, checkHost, clearNetConfig, DEFAULT_PORT } from "@/lib/net";
 import { sampleReceipt } from "@/lib/receipt";
 import { ReceiptPreviewDialog } from "@/components/receipt/ReceiptPreviewDialog";
+import { loadSmtpConfig, sendTestEmail, NOTIFIABLE_STATUSES, type SmtpConfig } from "@/lib/email";
 import { ROLE_LABEL } from "@/lib/roles";
 import { formatBasisPoints, dollarsToCents } from "@/lib/format";
 import type { ThemeMode, TechRole } from "@/types";
@@ -61,6 +62,7 @@ export default function SettingsPage() {
           <TabsTrigger value="technicians">Technicians</TabsTrigger>
           <TabsTrigger value="payments">Payments</TabsTrigger>
           <TabsTrigger value="rewards">Rewards</TabsTrigger>
+          <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="network">Network</TabsTrigger>
           <TabsTrigger value="bench">Bench</TabsTrigger>
           <TabsTrigger value="appearance">Appearance</TabsTrigger>
@@ -81,6 +83,9 @@ export default function SettingsPage() {
         <TabsContent value="rewards">
           <RewardsSettings />
         </TabsContent>
+        <TabsContent value="notifications">
+          <NotificationsSettings />
+        </TabsContent>
         <TabsContent value="network">
           <NetworkSettings />
         </TabsContent>
@@ -95,6 +100,121 @@ export default function SettingsPage() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+function NotificationsSettings() {
+  const { data } = useAsync(loadSmtpConfig, []);
+  const [draft, setDraft] = useState<SmtpConfig | null>(null);
+  const [testTo, setTestTo] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+
+  useEffect(() => {
+    if (data && !draft) {
+      setDraft(data);
+      setTestTo(data.fromEmail || data.user);
+    }
+  }, [data, draft]);
+
+  if (!draft) return <div className="text-sm text-muted-foreground">Loading...</div>;
+  const d = draft;
+
+  function set<K extends keyof SmtpConfig>(k: K, v: SmtpConfig[K]) {
+    setDraft((prev) => (prev ? { ...prev, [k]: v } : prev));
+  }
+  function toggleStatus(s: string) {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const on = prev.statuses.includes(s);
+      return { ...prev, statuses: on ? prev.statuses.filter((x) => x !== s) : [...prev.statuses, s] };
+    });
+  }
+
+  async function save() {
+    setSaving(true);
+    try {
+      await setSetting("notify.enabled", d.enabled);
+      await setSetting("notify.smtp_host", d.host.trim());
+      await setSetting("notify.smtp_port", Number(d.port) || 587);
+      await setSetting("notify.smtp_user", d.user.trim());
+      await setSetting("notify.smtp_pass", d.pass);
+      await setSetting("notify.from_name", d.fromName.trim());
+      await setSetting("notify.from_email", d.fromEmail.trim());
+      await setSetting("notify.statuses", d.statuses);
+      toast.success("Notification settings saved");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function test() {
+    if (!testTo.includes("@")) { toast.error("Enter a recipient email"); return; }
+    setTesting(true);
+    try {
+      await sendTestEmail(d, testTo.trim());
+      toast.success(`Test email sent to ${testTo.trim()}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not send the test email");
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  return (
+    <Card className="max-w-2xl">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><Mail className="h-4 w-4" /> Email notifications</CardTitle>
+        <CardDescription>
+          Email customers a friendly update when their repair changes status. Use your own SMTP provider - Gmail works with an app password (requires 2-step verification turned on).
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <label className="flex items-center gap-2 text-sm">
+          <Switch checked={d.enabled} onCheckedChange={(v) => set("enabled", v)} />
+          Send status emails to customers
+        </label>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5"><Label>SMTP host</Label><Input value={d.host} onChange={(e) => set("host", e.target.value)} placeholder="smtp.gmail.com" /></div>
+          <div className="space-y-1.5"><Label>Port</Label><Input value={String(d.port)} onChange={(e) => set("port", Number(e.target.value) || 587)} placeholder="587" /></div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5"><Label>Username (email)</Label><Input value={d.user} onChange={(e) => set("user", e.target.value)} placeholder="shop@gmail.com" /></div>
+          <div className="space-y-1.5"><Label>App password</Label><Input type="password" value={d.pass} onChange={(e) => set("pass", e.target.value)} placeholder="16-character app password" /></div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5"><Label>From name</Label><Input value={d.fromName} onChange={(e) => set("fromName", e.target.value)} placeholder="Your shop name" /></div>
+          <div className="space-y-1.5"><Label>From email</Label><Input value={d.fromEmail} onChange={(e) => set("fromEmail", e.target.value)} placeholder="shop@gmail.com" /></div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Notify on these status changes</Label>
+          <div className="flex flex-wrap gap-2">
+            {NOTIFIABLE_STATUSES.map((s) => (
+              <button
+                type="button"
+                key={s}
+                onClick={() => toggleStatus(s)}
+                className={`rounded-full border px-3 py-1 text-xs transition-colors ${d.statuses.includes(s) ? "border-primary bg-primary/10 text-foreground" : "border-border text-muted-foreground hover:border-ring"}`}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex items-end gap-2">
+          <div className="flex-1 space-y-1.5"><Label>Send a test to</Label><Input value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder="you@example.com" /></div>
+          <Button variant="outline" onClick={test} disabled={testing}>{testing ? "Sending..." : "Send test"}</Button>
+        </div>
+        <p className="text-xs text-muted-foreground">Only customers with an email on file are notified, and sending needs an internet connection.</p>
+
+        <div className="flex justify-end">
+          <Button onClick={save} disabled={saving}><Save /> {saving ? "Saving..." : "Save"}</Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

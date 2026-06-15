@@ -50,6 +50,7 @@ pub fn run() {
             commands::square::square_refund_payment,
             commands::system::open_external,
             commands::system::app_data_dir,
+            commands::system::scan_files,
             commands::net::net_post,
             commands::net::net_post_bytes,
             commands::net::net_health,
@@ -59,6 +60,7 @@ pub fn run() {
             commands::update::check_for_update,
             commands::update::install_update,
             commands::camera::save_capture,
+            commands::email::send_email,
         ])
         .run(tauri::generate_context!())
         .expect("error while running userrepair");
