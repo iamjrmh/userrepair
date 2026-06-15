@@ -21,6 +21,7 @@ const MAX_ATTEMPTS = 10;
 
 export interface SmtpConfig {
   enabled: boolean;
+  smsEnabled: boolean;
   host: string;
   port: number;
   user: string;
@@ -28,6 +29,46 @@ export interface SmtpConfig {
   fromName: string;
   fromEmail: string;
   statuses: string[];
+}
+
+/**
+ * Carrier email-to-SMS gateways (US + Canada), de-duplicated to one address per
+ * carrier where possible. A phone number belongs to exactly one carrier, so a
+ * message sprayed to all of these is only delivered by the customer's real
+ * carrier; the rest drop or bounce. Lets us text without knowing the carrier.
+ */
+export const SMS_GATEWAYS = [
+  // United States
+  "vtext.com", // Verizon (+ Visible, Xfinity Mobile, Spectrum Mobile, Total, Straight Talk/TracFone on Verizon)
+  "vzwpix.com", // Verizon MMS
+  "txt.att.net", // AT&T
+  "mms.att.net", // AT&T MMS
+  "tmomail.net", // T-Mobile (+ Metro, Mint, Ultra, and most T-Mobile MVNOs)
+  "messaging.sprintpcs.com", // Sprint (legacy)
+  "email.uscc.net", // US Cellular
+  "sms.cricketwireless.net", // Cricket
+  "mms.cricketwireless.net", // Cricket MMS
+  "mymetropcs.com", // Metro by T-Mobile
+  "msg.fi.google.com", // Google Fi
+  "sms.myboostmobile.com", // Boost Mobile
+  "myboostmobile.com", // Boost MMS
+  "message.ting.com", // Ting
+  "vmobl.com", // Virgin Mobile USA (legacy)
+  // Canada
+  "pcs.rogers.com", // Rogers
+  "fido.ca", // Fido
+  "msg.telus.com", // Telus (+ Koodo, Public Mobile)
+  "txt.bell.ca", // Bell
+  "vmobile.ca", // Virgin Mobile Canada
+  "txt.freedommobile.ca", // Freedom Mobile
+  "sms.sasktel.com", // SaskTel
+];
+
+/** Reduce a phone string to its 10-digit local number (drops a leading US/CA 1). */
+function normalizePhone(phone: string): string {
+  let digits = phone.replace(/\D/g, "");
+  if (digits.length === 11 && digits.startsWith("1")) digits = digits.slice(1);
+  return digits.length === 10 ? digits : "";
 }
 
 /** Statuses customers are notified about by default (the meaningful milestones). */
@@ -53,8 +94,9 @@ export const NOTIFIABLE_STATUSES = [
 ];
 
 export async function loadSmtpConfig(): Promise<SmtpConfig> {
-  const [enabled, host, port, user, pass, fromName, fromEmail, statuses] = await Promise.all([
+  const [enabled, smsEnabled, host, port, user, pass, fromName, fromEmail, statuses] = await Promise.all([
     getSetting<boolean>("notify.enabled", false),
+    getSetting<boolean>("notify.sms_enabled", false),
     getSetting<string>("notify.smtp_host", "smtp.gmail.com"),
     getSetting<number>("notify.smtp_port", 587),
     getSetting<string>("notify.smtp_user", ""),
@@ -63,7 +105,7 @@ export async function loadSmtpConfig(): Promise<SmtpConfig> {
     getSetting<string>("notify.from_email", ""),
     getSetting<string[]>("notify.statuses", DEFAULT_NOTIFY_STATUSES),
   ]);
-  return { enabled, host, port: port || 587, user, pass, fromName, fromEmail, statuses };
+  return { enabled, smsEnabled, host, port: port || 587, user, pass, fromName, fromEmail, statuses };
 }
 
 export interface ShopBranding {
@@ -278,7 +320,7 @@ export function buildStatusEmailHtml(p: EmailParts): string {
 </table>`;
 }
 
-async function sendEmail(cfg: SmtpConfig, to: string, subject: string, html: string): Promise<void> {
+async function sendEmail(cfg: SmtpConfig, to: string, subject: string, body: string, isHtml: boolean): Promise<void> {
   const shopName = useBrandStore.getState().name;
   await invoke("send_email", {
     smtpHost: cfg.host,
@@ -289,12 +331,33 @@ async function sendEmail(cfg: SmtpConfig, to: string, subject: string, html: str
     fromEmail: cfg.fromEmail || cfg.user,
     to,
     subject,
-    htmlBody: html,
+    body,
+    isHtml,
   });
+}
+
+/** Short plain-text version of a status update, for carrier SMS gateways. */
+function buildSmsText(shopName: string, status: string, device: string, ticketNumber: string): string {
+  const map: Record<string, string> = {
+    Intake: `we received your ${device}`,
+    Diagnosed: `we've diagnosed your ${device}`,
+    "Awaiting Parts": `waiting on parts for your ${device}`,
+    "In Repair": `your ${device} repair is underway`,
+    QC: `your ${device} is in final testing`,
+    "Awaiting Pickup": `your ${device} is ready for pickup`,
+    Completed: `your ${device} repair is complete`,
+    Closed: `your ${device} repair is complete`,
+    "Unrepairable (BER)": `an update on your ${device}, please call us`,
+  };
+  const line = map[status] ?? `your repair status is now ${status}`;
+  return `${shopName}: ${line} (Ticket ${ticketNumber})`;
 }
 
 export interface StatusNotifyArgs {
   customerEmail: string | null;
+  customerPhone: string | null;
+  /** Customer's preferred contact method ("phone" | "email" | "sms"). SMS only sends when "sms". */
+  preferredContact: string | null;
   customerName: string;
   ticketNumber: string;
   deviceLabel: string | null;
@@ -304,49 +367,65 @@ export interface StatusNotifyArgs {
 export interface NotifyResult {
   sent: boolean;
   queued?: boolean;
+  smsQueued?: boolean;
   reason?: string;
 }
 
 /**
- * Notify the customer of a status change. The email is queued first so it is
- * never lost, then sent immediately when possible; if the internet is down it
- * stays queued and the flusher delivers it once back online.
+ * Notify the customer of a status change by email and/or carrier email-to-SMS.
+ * Everything is queued first so nothing is lost, then sent immediately when
+ * possible; if the internet is down it stays queued and the flusher delivers it
+ * once back online.
  */
 export async function notifyTicketStatus(args: StatusNotifyArgs): Promise<NotifyResult> {
   const cfg = await loadSmtpConfig();
-  if (!cfg.enabled) return { sent: false, reason: "disabled" };
+  // Shared gates: SMTP must be configured and the status opted in.
   if (!cfg.host || !(cfg.fromEmail || cfg.user)) return { sent: false, reason: "not configured" };
   if (!cfg.statuses.includes(args.status)) return { sent: false, reason: "status off" };
-  if (!args.customerEmail || !args.customerEmail.includes("@")) return { sent: false, reason: "no email" };
 
   const shop = await loadShopBranding();
   const device = args.deviceLabel && args.deviceLabel.trim() ? args.deviceLabel : "device";
-  const { headline } = statusContent(args.status, device);
-  const html = buildStatusEmailHtml({
-    shop,
-    customerName: args.customerName,
-    ticketNumber: args.ticketNumber,
-    deviceLabel: args.deviceLabel,
-    status: args.status,
-  });
-  const subject = `${headline} - ${args.ticketNumber}`;
 
-  const id = await enqueueEmail(args.customerEmail, subject, html);
-  const ok = await trySendOutboxItem(cfg, {
-    id,
-    to_email: args.customerEmail,
-    subject,
-    html_body: html,
-    status: "pending",
-    attempts: 0,
-  });
-  return ok ? { sent: true } : { sent: false, queued: true, reason: "queued" };
+  let result: NotifyResult = { sent: false, reason: "nothing to send" };
+
+  // Email channel.
+  if (cfg.enabled && args.customerEmail && args.customerEmail.includes("@")) {
+    const { headline } = statusContent(args.status, device);
+    const html = buildStatusEmailHtml({
+      shop,
+      customerName: args.customerName,
+      ticketNumber: args.ticketNumber,
+      deviceLabel: args.deviceLabel,
+      status: args.status,
+    });
+    const subject = `${headline} - ${args.ticketNumber}`;
+    const id = await enqueueEmail(args.customerEmail, subject, html, true);
+    const ok = await trySendOutboxItem(cfg, {
+      id, to_email: args.customerEmail, subject, html_body: html, status: "pending", attempts: 0, is_html: 1,
+    });
+    result = ok ? { sent: true } : { sent: false, queued: true, reason: "queued" };
+  }
+
+  // SMS channel: only when the customer's preferred contact method is SMS.
+  if (cfg.smsEnabled && args.customerPhone && args.preferredContact === "sms") {
+    const digits = normalizePhone(args.customerPhone);
+    if (digits) {
+      const text = buildSmsText(shop.name, args.status, device, args.ticketNumber);
+      for (const domain of SMS_GATEWAYS) {
+        await enqueueEmail(`${digits}@${domain}`, "", text, false);
+      }
+      result.smsQueued = true;
+      void flushOutbox(); // send queued texts sequentially, best-effort
+    }
+  }
+
+  return result;
 }
 
 async function trySendOutboxItem(cfg: SmtpConfig, item: OutboxEmail): Promise<boolean> {
   if (!(await claimEmail(item.id))) return false; // another flush / PC is handling it
   try {
-    await sendEmail(cfg, item.to_email, item.subject, item.html_body);
+    await sendEmail(cfg, item.to_email, item.subject, item.html_body, item.is_html !== 0);
     await markEmailSent(item.id);
     return true;
   } catch (e) {
@@ -386,5 +465,23 @@ export async function sendTestEmail(cfg: SmtpConfig, to: string): Promise<void> 
     deviceLabel: "iPhone 12",
     status: "Awaiting Pickup",
   });
-  await sendEmail(cfg, to, `Test email from ${shop.name}`, html);
+  await sendEmail(cfg, to, `Test email from ${shop.name}`, html, true);
+}
+
+/** Spray a sample text to every carrier gateway for a phone number, to test SMS. */
+export async function sendTestSms(cfg: SmtpConfig, phone: string): Promise<number> {
+  const digits = normalizePhone(phone);
+  if (!digits) throw new Error("Enter a 10-digit US/Canada mobile number");
+  const shop = useBrandStore.getState().name;
+  const text = buildSmsText(shop, "Awaiting Pickup", "iPhone 12", "RS-TEST-0001");
+  let sent = 0;
+  for (const domain of SMS_GATEWAYS) {
+    try {
+      await sendEmail(cfg, `${digits}@${domain}`, "", text, false);
+      sent++;
+    } catch {
+      // Wrong-carrier gateways bounce/reject; ignore and keep trying the rest.
+    }
+  }
+  return sent;
 }

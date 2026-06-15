@@ -41,7 +41,7 @@ import { callCommand, getNetConfig, getLanIp, checkHost, clearNetConfig, DEFAULT
 import { sampleReceipt } from "@/lib/receipt";
 import { ReceiptPreviewDialog } from "@/components/receipt/ReceiptPreviewDialog";
 import { AddressAutocomplete } from "@/components/shared/AddressAutocomplete";
-import { loadSmtpConfig, sendTestEmail, NOTIFIABLE_STATUSES, type SmtpConfig } from "@/lib/email";
+import { loadSmtpConfig, sendTestEmail, sendTestSms, NOTIFIABLE_STATUSES, type SmtpConfig } from "@/lib/email";
 import { ROLE_LABEL } from "@/lib/roles";
 import { formatBasisPoints, dollarsToCents } from "@/lib/format";
 import type { ThemeMode, TechRole } from "@/types";
@@ -108,8 +108,10 @@ function NotificationsSettings() {
   const { data } = useAsync(loadSmtpConfig, []);
   const [draft, setDraft] = useState<SmtpConfig | null>(null);
   const [testTo, setTestTo] = useState("");
+  const [testPhone, setTestPhone] = useState("");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [testingSms, setTestingSms] = useState(false);
 
   useEffect(() => {
     if (data && !draft) {
@@ -136,6 +138,7 @@ function NotificationsSettings() {
     setSaving(true);
     try {
       await setSetting("notify.enabled", d.enabled);
+      await setSetting("notify.sms_enabled", d.smsEnabled);
       await setSetting("notify.smtp_host", d.host.trim());
       await setSetting("notify.smtp_port", Number(d.port) || 587);
       await setSetting("notify.smtp_user", d.user.trim());
@@ -159,6 +162,19 @@ function NotificationsSettings() {
       toast.error(e instanceof Error ? e.message : "Could not send the test email");
     } finally {
       setTesting(false);
+    }
+  }
+
+  async function testSms() {
+    if (testPhone.replace(/\D/g, "").length < 10) { toast.error("Enter a 10-digit mobile number"); return; }
+    setTestingSms(true);
+    try {
+      const n = await sendTestSms(d, testPhone.trim());
+      toast.success(`Test text sent to ${n} carrier gateways for ${testPhone.trim()}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not send the test text");
+    } finally {
+      setTestingSms(false);
     }
   }
 
@@ -208,6 +224,20 @@ function NotificationsSettings() {
         <div className="flex items-end gap-2">
           <div className="flex-1 space-y-1.5"><Label>Send a test to</Label><Input value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder="you@example.com" /></div>
           <Button variant="outline" onClick={test} disabled={testing}>{testing ? "Sending..." : "Send test"}</Button>
+        </div>
+
+        <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-3">
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <Switch checked={d.smsEnabled} onCheckedChange={(v) => set("smsEnabled", v)} />
+            Also text customers (free, via carrier email-to-SMS)
+          </label>
+          <p className="text-xs text-muted-foreground">
+            Texts only customers whose preferred contact is set to SMS on their account. Uses the same email setup above and sprays the message to every major US and Canada carrier gateway, so only the customer's real carrier delivers it - no carrier lookup needed. It is best-effort (no delivery receipt) and counts against your email provider's daily send limit.
+          </p>
+          <div className="flex items-end gap-2">
+            <div className="flex-1 space-y-1.5"><Label>Send a test text to</Label><Input value={testPhone} onChange={(e) => setTestPhone(e.target.value)} placeholder="555-123-4567" /></div>
+            <Button variant="outline" onClick={testSms} disabled={testingSms}>{testingSms ? "Sending..." : "Send test text"}</Button>
+          </div>
         </div>
         <p className="text-xs text-muted-foreground">Only customers with an email on file are notified, and sending needs an internet connection.</p>
 

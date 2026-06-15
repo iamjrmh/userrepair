@@ -105,5 +105,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("0016_notification_outbox.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 17,
+            description: "outbox is_html flag (plain text for email-to-SMS gateways)",
+            sql: include_str!("0017_outbox_is_html.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

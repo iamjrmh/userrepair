@@ -12,12 +12,18 @@ export interface OutboxEmail {
   html_body: string;
   status: string;
   attempts: number;
+  is_html: number;
 }
 
-export async function enqueueEmail(to: string, subject: string, html: string): Promise<number> {
+export async function enqueueEmail(
+  to: string,
+  subject: string,
+  body: string,
+  isHtml = true,
+): Promise<number> {
   const r = await run(
-    "INSERT INTO notification_outbox (to_email, subject, html_body) VALUES (?1, ?2, ?3)",
-    [to, subject, html],
+    "INSERT INTO notification_outbox (to_email, subject, html_body, is_html) VALUES (?1, ?2, ?3, ?4)",
+    [to, subject, body, isHtml ? 1 : 0],
   );
   return r.lastInsertId;
 }
@@ -54,7 +60,7 @@ export async function markEmailFailed(id: number, error: string, maxAttempts: nu
 
 export async function listPendingEmails(limit: number): Promise<OutboxEmail[]> {
   return select<OutboxEmail>(
-    "SELECT id, to_email, subject, html_body, status, attempts FROM notification_outbox WHERE status = 'pending' ORDER BY created_at LIMIT ?1",
+    "SELECT id, to_email, subject, html_body, status, attempts, is_html FROM notification_outbox WHERE status = 'pending' ORDER BY created_at LIMIT ?1",
     [limit],
   );
 }

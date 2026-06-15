@@ -94,17 +94,21 @@ export default function TicketDetailPage() {
     try {
       if (!ticket.customer_id) return;
       const customer = await getCustomer(ticket.customer_id);
+      const who = customer?.name ?? "the customer";
       const res = await notifyTicketStatus({
         customerEmail: customer?.email ?? null,
+        customerPhone: customer?.phone ?? null,
+        preferredContact: customer?.preferred_contact ?? null,
         customerName: customer?.name ?? "there",
         ticketNumber: ticket.ticket_number,
         deviceLabel: ticket.device_label,
         status: to,
       });
-      if (res.sent) toast.success(`Emailed ${customer?.name ?? "the customer"} the update`);
-      else if (res.queued) toast(`No internet right now - the update to ${customer?.name ?? "the customer"} is queued and will send when you are back online`);
+      if (res.sent) toast.success(`Notified ${who} of the update${res.smsQueued ? " (email + text)" : ""}`);
+      else if (res.queued) toast(`No internet right now - ${who}'s update is queued and will send when you are back online`);
+      else if (res.smsQueued) toast.success(`Texting ${who} the update`);
     } catch {
-      toast.error("Status saved, but the email could not be sent");
+      toast.error("Status saved, but the notification could not be sent");
     }
   }
 

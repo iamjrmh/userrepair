@@ -20,7 +20,8 @@ fn send_blocking(
     from_email: String,
     to: String,
     subject: String,
-    html_body: String,
+    body: String,
+    is_html: bool,
 ) -> Result<(), String> {
     let from_str = if from_name.trim().is_empty() {
         from_email.clone()
@@ -34,12 +35,18 @@ fn send_blocking(
         .parse()
         .map_err(|e| format!("Invalid recipient address: {e}"))?;
 
+    // Plain text for carrier email-to-SMS gateways, HTML for status emails.
+    let content_type = if is_html {
+        ContentType::TEXT_HTML
+    } else {
+        ContentType::TEXT_PLAIN
+    };
     let email = Message::builder()
         .from(from)
         .to(to_mb)
         .subject(subject)
-        .header(ContentType::TEXT_HTML)
-        .body(html_body)
+        .header(content_type)
+        .body(body)
         .map_err(|e| format!("Could not build the email: {e}"))?;
 
     let creds = Credentials::new(smtp_user, smtp_pass);
@@ -69,12 +76,13 @@ pub async fn send_email(
     from_email: String,
     to: String,
     subject: String,
-    html_body: String,
+    body: String,
+    is_html: bool,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         send_blocking(
-            smtp_host, smtp_port, smtp_user, smtp_pass, from_name, from_email, to, subject,
-            html_body,
+            smtp_host, smtp_port, smtp_user, smtp_pass, from_name, from_email, to, subject, body,
+            is_html,
         )
     })
     .await
