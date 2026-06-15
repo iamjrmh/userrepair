@@ -191,23 +191,35 @@ pub async fn install_update(
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        let install_cmd = if asset_name.to_lowercase().ends_with(".msi") {
-            format!("start \"\" /wait msiexec /i \"{dest_str}\" /qn /norestart")
+        // Single-quote escape for PowerShell string literals.
+        let q = |s: &str| s.replace('\'', "''");
+        let install_ps = if asset_name.to_lowercase().ends_with(".msi") {
+            format!(
+                "Start-Process -FilePath 'msiexec' -ArgumentList '/i','{}','/qn','/norestart' -Wait",
+                q(&dest_str)
+            )
         } else {
             // NSIS setup: /S is a fully silent install.
-            format!("start \"\" /wait \"{dest_str}\" /S")
+            format!("Start-Process -FilePath '{}' -ArgumentList '/S' -Wait", q(&dest_str))
         };
-        let relaunch = if app_exe.is_empty() {
+        let relaunch_ps = if app_exe.is_empty() {
             String::new()
         } else {
-            format!(" & start \"\" \"{app_exe}\"")
+            format!("; Start-Process -FilePath '{}'", q(&app_exe))
         };
-        // ping is a console-safe ~2s sleep so the app is fully closed before the
-        // installer replaces its binary.
-        let line = format!("/C ping -n 3 127.0.0.1 >nul & {install_cmd}{relaunch}");
+        // Wait ~2s for this app to close, install silently, then relaunch. Run via
+        // a hidden PowerShell (no console window flashes).
+        let script = format!("Start-Sleep -Seconds 2; {install_ps}{relaunch_ps}");
 
-        std::process::Command::new("cmd")
-            .raw_arg(&line)
+        std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                &script,
+            ])
             .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
             .spawn()
             .map_err(|e| format!("spawn installer: {e}"))?;
