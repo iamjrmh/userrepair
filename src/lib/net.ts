@@ -149,9 +149,14 @@ export async function getLanIp(): Promise<string> {
   return invoke<string>("host_lan_ip");
 }
 
-/** Start the embedded host server (host mode). Idempotent on the Rust side. */
-export async function startHostServer(port: number, key: string): Promise<void> {
-  await invoke("start_host_server", { port, key });
+/**
+ * Start the embedded server. Idempotent on the Rust side. In host mode the LAN
+ * data endpoints are enabled; in standalone we still start it (so the inbound
+ * webhook / Inbox works) but with `lanEnabled` false, which disables those data
+ * endpoints and serves only the inbound webhooks.
+ */
+export async function startHostServer(port: number, key: string, lanEnabled: boolean): Promise<void> {
+  await invoke("start_host_server", { port, key, lanEnabled });
 }
 
 /**

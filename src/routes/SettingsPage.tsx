@@ -113,8 +113,7 @@ function NotificationsSettings() {
   const [testing, setTesting] = useState(false);
   const [testingSms, setTestingSms] = useState(false);
   const [testingPingram, setTestingPingram] = useState(false);
-  const [webhookSms, setWebhookSms] = useState("");
-  const [webhookEmail, setWebhookEmail] = useState("");
+  const [lanHost, setLanHost] = useState("YOUR-MAIN-PC");
 
   useEffect(() => {
     if (data && !draft) {
@@ -124,18 +123,21 @@ function NotificationsSettings() {
   }, [data, draft]);
 
   useEffect(() => {
-    const cfg = getNetConfig();
-    const tokenPart = cfg.key ? `?token=${encodeURIComponent(cfg.key)}` : "";
-    const build = (host: string) => {
-      const base = `http://${host}:${cfg.port || DEFAULT_PORT}`;
-      setWebhookSms(`${base}/inbound/sms${tokenPart}`);
-      setWebhookEmail(`${base}/inbound/email${tokenPart}`);
-    };
-    void getLanIp().then(build).catch(() => build("YOUR-MAIN-PC"));
+    void getLanIp().then(setLanHost).catch(() => setLanHost("YOUR-MAIN-PC"));
   }, []);
 
   if (!draft) return <div className="text-sm text-muted-foreground">Loading...</div>;
   const d = draft;
+
+  // Build the inbound webhook URLs live from the draft. A public base (e.g. a
+  // Cloudflare Tunnel) overrides the LAN address; the token is the dedicated
+  // inbound secret set just below, not the LAN access key.
+  const webhookBase = d.publicBaseUrl.trim()
+    ? d.publicBaseUrl.trim().replace(/\/+$/, "")
+    : `http://${lanHost}:${getNetConfig().port || DEFAULT_PORT}`;
+  const tokenPart = d.inboundToken.trim() ? `?token=${encodeURIComponent(d.inboundToken.trim())}` : "";
+  const webhookSms = `${webhookBase}/inbound/sms${tokenPart}`;
+  const webhookEmail = `${webhookBase}/inbound/email${tokenPart}`;
 
   function set<K extends keyof SmtpConfig>(k: K, v: SmtpConfig[K]) {
     setDraft((prev) => (prev ? { ...prev, [k]: v } : prev));
@@ -159,6 +161,8 @@ function NotificationsSettings() {
       await setSetting("notify.pingram_base_url", (d.pingramBaseUrl || "https://api.pingram.io").trim());
       await setSetting("notify.pingram_email_enabled", d.pingramEmailEnabled);
       await setSetting("notify.pingram_sender_domain", d.pingramSenderDomain.trim().replace(/^@+/, ""));
+      await setSetting("notify.inbound_token", d.inboundToken.trim());
+      await setSetting("notify.public_base_url", d.publicBaseUrl.trim().replace(/\/+$/, ""));
       await setSetting("notify.smtp_host", d.host.trim());
       await setSetting("notify.smtp_port", Number(d.port) || 587);
       await setSetting("notify.smtp_user", d.user.trim());
@@ -299,10 +303,23 @@ function NotificationsSettings() {
 
           <div className="space-y-1.5">
             <Label>Inbound webhooks (for the Inbox)</Label>
-            <Input readOnly value={webhookSms} className="font-mono text-[11px]" onFocus={(e) => e.currentTarget.select()} />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-normal text-muted-foreground">Public address (optional)</Label>
+                <Input value={d.publicBaseUrl} onChange={(e) => set("publicBaseUrl", e.target.value)} placeholder="https://your-tunnel.trycloudflare.com" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-normal text-muted-foreground">Webhook token (optional)</Label>
+                <div className="flex gap-2">
+                  <Input value={d.inboundToken} onChange={(e) => set("inboundToken", e.target.value)} placeholder="leave blank for none" />
+                  <Button type="button" variant="outline" size="sm" onClick={() => set("inboundToken", crypto.randomUUID().replace(/-/g, ""))}>Generate</Button>
+                </div>
+              </div>
+            </div>
+            <Input readOnly value={webhookSms} className="mt-1.5 font-mono text-[11px]" onFocus={(e) => e.currentTarget.select()} />
             <Input readOnly value={webhookEmail} className="mt-1.5 font-mono text-[11px]" onFocus={(e) => e.currentTarget.select()} />
             <p className="text-[11px] text-muted-foreground">
-              Paste the first into Pingram&apos;s SMS inbound webhook and the second into the Email inbound webhook, so customer replies land in the Inbox (Manager+). These are your main PC&apos;s local address; for Pingram to reach it over the internet, expose your main PC publicly (e.g. a free Cloudflare Tunnel) and swap in that public URL, keeping the same paths and token.
+              Paste the first into Pingram&apos;s SMS inbound webhook and the second into the Email inbound webhook, so customer replies land in the Inbox (Manager+). Set a <strong>Public address</strong> (e.g. your free Cloudflare Tunnel URL) so Pingram can reach this PC over the internet, and the URLs above update to match. The token is a dedicated secret for these webhooks (separate from the LAN access key); leave it blank to accept any caller. <strong>Save</strong> after changing either.
             </p>
           </div>
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Inbox as InboxIcon, RefreshCw, Trash2, Send, CheckCheck, Clock, User } from "lucide-react";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -17,12 +17,22 @@ import {
   type InboxMessage,
 } from "@/lib/repos/inbox";
 import { sendInboxReply } from "@/lib/email";
+import { broadcastChange } from "@/lib/sync";
 import { formatRelative, formatDateTime } from "@/lib/format";
 
 export default function InboxPage() {
   const { data, loading, reload } = useAsync(listInboxMessages, []);
   const messages = data ?? [];
   const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  // Inbound replies arrive via the webhook into the database, so poll for new
+  // ones while the Inbox is open (no manual refresh needed). A rev bump does a
+  // background refresh, keeping the list on screen instead of flashing a skeleton.
+  useEffect(() => {
+    const t = setInterval(() => broadcastChange(), 12000);
+    return () => clearInterval(t);
+  }, []);
+
   const selected = messages.find((m) => m.id === selectedId) ?? null;
   const unread = messages.filter((m) => m.is_read === 0).length;
 

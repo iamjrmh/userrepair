@@ -43,6 +43,11 @@ export interface SmtpConfig {
   pingramEmailEnabled: boolean;
   /** The verified sending domain, e.g. "iamjrmh.xyz" (sender becomes username@domain). */
   pingramSenderDomain: string;
+  // Inbound webhook (Inbox). A dedicated token, separate from the LAN access key.
+  /** Optional secret required on the inbound webhook URL (blank = open). */
+  inboundToken: string;
+  /** Optional public base URL of this PC (e.g. a Cloudflare Tunnel) for the webhook display. */
+  publicBaseUrl: string;
 }
 
 export const PINGRAM_DEFAULT_BASE_URL = "https://api.pingram.io";
@@ -115,7 +120,7 @@ export async function loadSmtpConfig(): Promise<SmtpConfig> {
   const [
     enabled, smsEnabled, host, port, user, pass, fromName, fromEmail, statuses,
     pingramEnabled, pingramApiKey, pingramType, pingramBaseUrl,
-    pingramEmailEnabled, pingramSenderDomain,
+    pingramEmailEnabled, pingramSenderDomain, inboundToken, publicBaseUrl,
   ] = await Promise.all([
     getSetting<boolean>("notify.enabled", false),
     getSetting<boolean>("notify.sms_enabled", false),
@@ -132,12 +137,15 @@ export async function loadSmtpConfig(): Promise<SmtpConfig> {
     getSetting<string>("notify.pingram_base_url", PINGRAM_DEFAULT_BASE_URL),
     getSetting<boolean>("notify.pingram_email_enabled", false),
     getSetting<string>("notify.pingram_sender_domain", PINGRAM_DEFAULT_SENDER_DOMAIN),
+    getSetting<string>("notify.inbound_token", ""),
+    getSetting<string>("notify.public_base_url", ""),
   ]);
   return {
     enabled, smsEnabled, host, port: port || 587, user, pass, fromName, fromEmail, statuses,
     pingramEnabled, pingramApiKey, pingramType: pingramType || PINGRAM_DEFAULT_TYPE,
     pingramBaseUrl: pingramBaseUrl || PINGRAM_DEFAULT_BASE_URL,
     pingramEmailEnabled, pingramSenderDomain: pingramSenderDomain || PINGRAM_DEFAULT_SENDER_DOMAIN,
+    inboundToken, publicBaseUrl,
   };
 }
 

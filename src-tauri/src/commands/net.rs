@@ -90,12 +90,12 @@ pub async fn net_health(host: String, key: String) -> Result<serde_json::Value, 
 /// Start the LAN host server (idempotent: subsequent calls are no-ops). Spawns
 /// the axum server on a background task so the app keeps running.
 #[tauri::command]
-pub async fn start_host_server(app: AppHandle, port: u16, key: String) -> Result<(), String> {
+pub async fn start_host_server(app: AppHandle, port: u16, key: String, lan_enabled: bool) -> Result<(), String> {
     if SERVER_STARTED.swap(true, Ordering::SeqCst) {
         return Ok(());
     }
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = crate::server::run_server(app, port, key).await {
+        if let Err(e) = crate::server::run_server(app, port, key, lan_enabled).await {
             eprintln!("[userrepair] host server stopped: {e}");
             SERVER_STARTED.store(false, Ordering::SeqCst);
         }

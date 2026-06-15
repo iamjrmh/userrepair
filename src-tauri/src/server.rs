@@ -41,6 +41,10 @@ struct ServerState {
     pool: SqlitePool,
     key: String,
     app: AppHandle,
+    /// When false (standalone mode), only the inbound webhooks are served; the
+    /// LAN data/command endpoints are disabled so a publicly-exposed PC (e.g. via
+    /// a tunnel for the Inbox) does not also expose its database.
+    lan_enabled: bool,
 }
 
 /// Resolve the path to the shared SQLite database file.
@@ -55,7 +59,7 @@ fn db_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
 /// Start serving on `0.0.0.0:port`. Runs until the process exits. Backed by a
 /// small pool to the same database file the host's own app uses (WAL mode allows
 /// the concurrent access).
-pub async fn run_server(app: AppHandle, port: u16, key: String) -> Result<(), String> {
+pub async fn run_server(app: AppHandle, port: u16, key: String, lan_enabled: bool) -> Result<(), String> {
     let path = db_path(&app)?;
     let opts = SqliteConnectOptions::from_str(&format!("sqlite:{}", path.to_string_lossy()))
         .map_err(|e| e.to_string())?
@@ -68,7 +72,7 @@ pub async fn run_server(app: AppHandle, port: u16, key: String) -> Result<(), St
         .await
         .map_err(|e| format!("server db connect failed: {e}"))?;
 
-    let state = Arc::new(ServerState { pool, key, app });
+    let state = Arc::new(ServerState { pool, key, app, lan_enabled });
 
     let router = Router::new()
         .route("/health", get(health))
@@ -96,6 +100,9 @@ pub async fn run_server(app: AppHandle, port: u16, key: String) -> Result<(), St
 
 /// Constant-time-ish key check. An empty configured key disables auth (open LAN).
 fn authed(headers: &HeaderMap, state: &ServerState) -> bool {
+    if !state.lan_enabled {
+        return false; // standalone: LAN data endpoints are off entirely
+    }
     if state.key.is_empty() {
         return true;
     }
@@ -111,6 +118,9 @@ fn unauthorized() -> Json<Value> {
 }
 
 async fn health(State(state): State<Arc<ServerState>>) -> Json<Value> {
+    if !state.lan_enabled {
+        return Json(json!({ "ok": false }));
+    }
     let shop = setting(&state.pool, "shop.name").await;
     Json(json!({
         "ok": true,
@@ -314,7 +324,10 @@ async fn inbound_sms(
     Query(q): Query<HashMap<String, String>>,
     Json(body): Json<Value>,
 ) -> Json<Value> {
-    if !state.key.is_empty() && q.get("token").map(String::as_str) != Some(state.key.as_str()) {
+    // Gate on the dedicated inbound token from Settings -> Notifications, NOT the
+    // LAN access key. Blank token = accept any caller.
+    let want = setting(&state.pool, "notify.inbound_token").await;
+    if !want.is_empty() && q.get("token").map(String::as_str) != Some(want.as_str()) {
         return unauthorized();
     }
 

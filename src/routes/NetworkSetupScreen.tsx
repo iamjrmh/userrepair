@@ -27,6 +27,8 @@ export default function NetworkSetupScreen({ onDone }: { onDone: (mode: NetMode)
 
   function chooseStandalone() {
     setNetConfig({ mode: "standalone" });
+    // Start the inbound-only server now so the Inbox webhook works without a restart.
+    void startHostServer(DEFAULT_PORT, "", false).catch(() => undefined);
     onDone("standalone");
   }
 
@@ -67,7 +69,7 @@ function HostSetup({ onBack, onDone }: { onBack: () => void; onDone: () => void 
     setBusy(true);
     try {
       setNetConfig({ mode: "host", port: portNum, key: key.trim() });
-      await startHostServer(portNum, key.trim());
+      await startHostServer(portNum, key.trim(), true);
       onDone();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not start the host server");

@@ -64,7 +64,10 @@ export default function App() {
     if (mode === null) return; // first launch: show the network setup screen
     if (mode === "host") {
       const cfg = getNetConfig();
-      void startHostServer(cfg.port, cfg.key).catch(() => undefined);
+      void startHostServer(cfg.port, cfg.key, true).catch(() => undefined);
+    } else if (mode === "standalone") {
+      // Single PC: still run the server (inbound-only) so the Inbox webhook works.
+      void startHostServer(getNetConfig().port, "", false).catch(() => undefined);
     }
     void proceed();
     // eslint-disable-next-line react-hooks/exhaustive-deps

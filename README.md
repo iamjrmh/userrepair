@@ -240,7 +240,9 @@ Customers are texted only when their **preferred contact** is set to SMS, and em
 
 Sending texts and emails works on its own. To also receive **replies** in the **Inbox**, Pingram (which lives in the cloud) needs to reach your main PC, and the main PC only listens on your local network. A free **Cloudflare Tunnel** gives your main PC a public HTTPS address without opening any ports.
 
-> **About the token.** The `?token=...` on the webhook URL is **not** a Cloudflare value - it is your userrepair host's own access key (the one set when you chose "This is the main PC"). userrepair builds the full webhook URL for you, token included, in **Settings -> Notifications -> Inbound webhooks** - just copy it from there. If your main PC has no access key, leave the `?token=...` part off entirely.
+> **About the token.** The `?token=...` on the webhook URL is **not** a Cloudflare value, and it is **not** your LAN access key. It is a dedicated **inbound webhook token** you set in **Settings -> Notifications -> Inbound webhooks** (there is a **Generate** button). Leave it blank to accept any caller. Either way, userrepair builds the full webhook URLs for you there - just paste your **Public address** (the Cloudflare URL) into that same panel and copy the finished URLs.
+
+> **Works on a single PC too.** You do not need the multi-PC "main PC" mode for this. Even in "Just this PC" mode, userrepair runs a small local receiver (only the inbound webhooks are exposed - never your database) so replies reach the Inbox.
 
 You only need this for the Inbox. Set it up on the **main PC** (the one running in "This is the main PC" mode).
 
@@ -258,14 +260,14 @@ This is the fastest way to confirm replies work. The host server runs on port `8
 cloudflared tunnel --url http://localhost:8787
 ```
 
-It prints a URL like `https://random-words.trycloudflare.com`. Take the two ready-made webhook URLs from **Settings -> Notifications -> Inbound webhooks** and swap their `http://YOUR-MAIN-PC:8787` part for that Cloudflare URL, keeping the paths and token. You end up with:
+It prints a URL like `https://random-words.trycloudflare.com`. In userrepair, open **Settings -> Notifications -> Inbound webhooks**, paste that into **Public address**, optionally click **Generate** for a token, and **Save**. The two finished URLs shown there become:
 
 ```
-https://random-words.trycloudflare.com/inbound/sms?token=YOUR-ACCESS-KEY
-https://random-words.trycloudflare.com/inbound/email?token=YOUR-ACCESS-KEY
+https://random-words.trycloudflare.com/inbound/sms?token=YOUR-TOKEN
+https://random-words.trycloudflare.com/inbound/email?token=YOUR-TOKEN
 ```
 
-Paste the first into Pingram's **SMS -> Inbound** webhook and the second into its **Email -> Inbound** webhook, then text or email your shop and the reply should appear in the Inbox. Note: this temporary URL changes every time you restart the command, so it is for testing.
+Copy the first into Pingram's **SMS -> Inbound** webhook and the second into its **Email -> Inbound** webhook, then text or email your shop and the reply should appear in the Inbox within a few seconds. Note: this temporary URL changes every time you restart the command, so it is for testing.
 
 **3. Permanent setup (stable URL, recommended)**
 
@@ -295,7 +297,7 @@ cloudflared tunnel run userrepair
 cloudflared service install
 ```
 
-Your stable webhooks become `https://sms.yourshop.com/inbound/sms?token=YOUR-ACCESS-KEY` and `https://sms.yourshop.com/inbound/email?token=YOUR-ACCESS-KEY`. Paste them into Pingram once and you are done.
+Set **Public address** to `https://sms.yourshop.com` in Settings, so your stable webhooks become `https://sms.yourshop.com/inbound/sms?token=YOUR-TOKEN` and `https://sms.yourshop.com/inbound/email?token=YOUR-TOKEN`. Paste them into Pingram once and you are done.
 
 **Notes**
 
