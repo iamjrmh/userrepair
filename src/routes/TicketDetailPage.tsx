@@ -102,6 +102,7 @@ export default function TicketDetailPage() {
         status: to,
       });
       if (res.sent) toast.success(`Emailed ${customer?.name ?? "the customer"} the update`);
+      else if (res.queued) toast(`No internet right now - the update to ${customer?.name ?? "the customer"} is queued and will send when you are back online`);
     } catch {
       toast.error("Status saved, but the email could not be sent");
     }

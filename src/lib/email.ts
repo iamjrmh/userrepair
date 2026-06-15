@@ -6,6 +6,18 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getSetting } from "@/lib/repos/settings";
 import { useBrandStore } from "@/stores/brand";
+import {
+  enqueueEmail,
+  claimEmail,
+  markEmailSent,
+  markEmailFailed,
+  listPendingEmails,
+  resetStaleSending,
+  pendingEmailCount,
+  type OutboxEmail,
+} from "@/lib/repos/outbox";
+
+const MAX_ATTEMPTS = 10;
 
 export interface SmtpConfig {
   enabled: boolean;
@@ -145,10 +157,15 @@ export interface StatusNotifyArgs {
 
 export interface NotifyResult {
   sent: boolean;
+  queued?: boolean;
   reason?: string;
 }
 
-/** Send a status-update email to the customer, if enabled and applicable. */
+/**
+ * Notify the customer of a status change. The email is queued first so it is
+ * never lost, then sent immediately when possible; if the internet is down it
+ * stays queued and the flusher delivers it once back online.
+ */
 export async function notifyTicketStatus(args: StatusNotifyArgs): Promise<NotifyResult> {
   const cfg = await loadSmtpConfig();
   if (!cfg.enabled) return { sent: false, reason: "disabled" };
@@ -165,8 +182,51 @@ export async function notifyTicketStatus(args: StatusNotifyArgs): Promise<Notify
     deviceLabel: args.deviceLabel,
     status: args.status,
   });
-  await sendEmail(cfg, args.customerEmail, `${headline} - ${args.ticketNumber}`, html);
-  return { sent: true };
+  const subject = `${headline} - ${args.ticketNumber}`;
+
+  const id = await enqueueEmail(args.customerEmail, subject, html);
+  const ok = await trySendOutboxItem(cfg, {
+    id,
+    to_email: args.customerEmail,
+    subject,
+    html_body: html,
+    status: "pending",
+    attempts: 0,
+  });
+  return ok ? { sent: true } : { sent: false, queued: true, reason: "queued" };
+}
+
+async function trySendOutboxItem(cfg: SmtpConfig, item: OutboxEmail): Promise<boolean> {
+  if (!(await claimEmail(item.id))) return false; // another flush / PC is handling it
+  try {
+    await sendEmail(cfg, item.to_email, item.subject, item.html_body);
+    await markEmailSent(item.id);
+    return true;
+  } catch (e) {
+    await markEmailFailed(item.id, e instanceof Error ? e.message : String(e), MAX_ATTEMPTS);
+    return false;
+  }
+}
+
+/**
+ * Send any queued emails. Safe to call often (a no-op when nothing waits). Used
+ * by the background flusher on launch and whenever the internet returns. Sends
+ * even if notifications were later turned off, as long as SMTP is configured.
+ */
+export async function flushOutbox(): Promise<{ sent: number; remaining: number }> {
+  const cfg = await loadSmtpConfig();
+  if (!cfg.host || !(cfg.fromEmail || cfg.user)) {
+    return { sent: 0, remaining: await pendingEmailCount() };
+  }
+  await resetStaleSending(new Date(Date.now() - 120000).toISOString());
+  const pending = await listPendingEmails(25);
+  let sent = 0;
+  for (const item of pending) {
+    const ok = await trySendOutboxItem(cfg, item);
+    if (ok) sent++;
+    else break; // likely offline; stop and retry later
+  }
+  return { sent, remaining: await pendingEmailCount() };
 }
 
 /** Send a sample email to a chosen address to verify the SMTP setup. */

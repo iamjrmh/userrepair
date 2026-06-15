@@ -6,6 +6,7 @@ import { CommandPalette } from "@/components/layout/CommandPalette";
 import { UpdateDialog } from "@/components/layout/UpdateDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSyncMonitor } from "@/hooks/useSyncMonitor";
+import { useOutboxFlusher } from "@/hooks/useOutboxFlusher";
 import { useUpdateStore } from "@/stores/update";
 
 function RouteFallback() {
@@ -19,6 +20,7 @@ function RouteFallback() {
 
 export function AppLayout() {
   useSyncMonitor();
+  useOutboxFlusher();
 
   // Check for an update once, when the app opens, and pop the dialog open right
   // away if one is available. No background polling: nothing appears mid-task.

@@ -99,5 +99,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("0015_ticket_locks.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 16,
+            description: "notification outbox queue for offline-tolerant status emails",
+            sql: include_str!("0016_notification_outbox.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
