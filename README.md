@@ -88,6 +88,7 @@ Built with **Tauri 2 (Rust)** + **React + TypeScript**.
 - **Financial**: revenue / expense, P&L, invoices. **Reporting** shows inventory value and inventory sale total (with the margin between), throughput, and most-failed components, all with CSV export.
 - **Multi-PC**: run it on several computers in the shop, all sharing one machine's data over the LAN, with **live refresh** and **automatic reconnect**.
 - **In-app updates**: a top-bar button checks for a new version on launch and on demand, shows a dot when one is ready, and installs it silently when you choose to. No auto-update.
+- **Customer notifications**: email customers a polished status update (with a repair-progress stepper) as their repair moves forward, through your own SMTP provider. Queued and retried if the internet is down.
 - **Extras**: global search (`Ctrl+K`), backup and restore, your own logo, dark mode, plugin foundation.
 
 ---
@@ -161,6 +162,7 @@ Everything is under **Settings**:
   Includes a manual refund tool. Refunds over a set amount require manager approval.
 - **Receipt** - choose 58mm or 80mm paper, set a footer message, and print a test receipt.
 - **Rewards** - turn the program on and set points-per-dollar and redemption value.
+- **Notifications** - email customers on status changes via your own SMTP (Gmail works with an app password); choose which statuses notify, edit nothing, and send a test.
 - **Network** - see this PC's role (standalone / main / client) and connection details.
 - **Bench** - set the folder where microscope photos and recordings are saved (on a multi-PC setup, every PC's captures are sent to this folder on the main PC).
 - **Staff** - create accounts, reset passwords, deactivate.
