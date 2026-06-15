@@ -13,17 +13,29 @@ export interface OutboxEmail {
   status: string;
   attempts: number;
   is_html: number;
+  /** 'smtp' (the shop's own server) or 'pingram' (per-user verified sender). */
+  channel: string;
+  from_name: string;
+  from_addr: string;
+}
+
+export interface EnqueueOpts {
+  isHtml?: boolean;
+  channel?: string;
+  fromName?: string;
+  fromAddr?: string;
 }
 
 export async function enqueueEmail(
   to: string,
   subject: string,
   body: string,
-  isHtml = true,
+  opts: EnqueueOpts = {},
 ): Promise<number> {
+  const { isHtml = true, channel = "smtp", fromName = "", fromAddr = "" } = opts;
   const r = await run(
-    "INSERT INTO notification_outbox (to_email, subject, html_body, is_html) VALUES (?1, ?2, ?3, ?4)",
-    [to, subject, body, isHtml ? 1 : 0],
+    "INSERT INTO notification_outbox (to_email, subject, html_body, is_html, channel, from_name, from_addr) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    [to, subject, body, isHtml ? 1 : 0, channel, fromName, fromAddr],
   );
   return r.lastInsertId;
 }
@@ -60,7 +72,7 @@ export async function markEmailFailed(id: number, error: string, maxAttempts: nu
 
 export async function listPendingEmails(limit: number): Promise<OutboxEmail[]> {
   return select<OutboxEmail>(
-    "SELECT id, to_email, subject, html_body, status, attempts, is_html FROM notification_outbox WHERE status = 'pending' ORDER BY created_at LIMIT ?1",
+    "SELECT id, to_email, subject, html_body, status, attempts, is_html, channel, from_name, from_addr FROM notification_outbox WHERE status = 'pending' ORDER BY created_at LIMIT ?1",
     [limit],
   );
 }

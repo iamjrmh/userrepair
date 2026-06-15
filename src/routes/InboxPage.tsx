@@ -16,7 +16,7 @@ import {
   deleteInboxMessage,
   type InboxMessage,
 } from "@/lib/repos/inbox";
-import { sendPingramReply } from "@/lib/email";
+import { sendInboxReply } from "@/lib/email";
 import { formatRelative, formatDateTime } from "@/lib/format";
 
 export default function InboxPage() {
@@ -38,7 +38,7 @@ export default function InboxPage() {
     <div className="flex h-full flex-col gap-4">
       <PageHeader
         title="Inbox"
-        description="Replies customers send to your text updates."
+        description="Replies customers send to your text and email updates."
         actions={
           <div className="flex gap-2">
             <Button variant="outline" onClick={async () => { await markAllInboxRead(); reload(); }} disabled={unread === 0}>
@@ -80,6 +80,9 @@ export default function InboxPage() {
                         <span className={cn("truncate text-sm", isUnread ? "font-semibold text-foreground" : "font-medium text-foreground/90")}>
                           {m.from_name ?? m.from_addr}
                         </span>
+                        <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                          {m.channel === "email" ? "Email" : "SMS"}
+                        </Badge>
                       </span>
                       <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{formatRelative(m.created_at)}</span>
                     </div>
@@ -122,7 +125,7 @@ function ReadingPane({ message, onChanged }: { message: InboxMessage; onChanged:
     if (!reply.trim()) return;
     setSending(true);
     try {
-      await sendPingramReply(message.from_addr, reply.trim());
+      await sendInboxReply(message.channel, message.from_addr, reply.trim());
       toast.success("Reply sent");
       setReply("");
       onChanged();
@@ -173,7 +176,9 @@ function ReadingPane({ message, onChanged }: { message: InboxMessage; onChanged:
       <div className="space-y-2 border-t border-border p-3">
         <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
           <Clock className="h-3 w-3 shrink-0" />
-          This number is checked weekly. Reply here for anything urgent and it sends as a real text right away.
+          {message.channel === "email"
+            ? "Replies are sent as an email from your account's address."
+            : "Replies are sent as a real text from your shop number right away."}
         </div>
         <div className="flex items-end gap-2">
           <Textarea

@@ -113,7 +113,8 @@ function NotificationsSettings() {
   const [testing, setTesting] = useState(false);
   const [testingSms, setTestingSms] = useState(false);
   const [testingPingram, setTestingPingram] = useState(false);
-  const [webhookUrl, setWebhookUrl] = useState("");
+  const [webhookSms, setWebhookSms] = useState("");
+  const [webhookEmail, setWebhookEmail] = useState("");
 
   useEffect(() => {
     if (data && !draft) {
@@ -125,9 +126,12 @@ function NotificationsSettings() {
   useEffect(() => {
     const cfg = getNetConfig();
     const tokenPart = cfg.key ? `?token=${encodeURIComponent(cfg.key)}` : "";
-    void getLanIp()
-      .then((ip) => setWebhookUrl(`http://${ip}:${cfg.port || DEFAULT_PORT}/inbound/sms${tokenPart}`))
-      .catch(() => setWebhookUrl(`http://YOUR-MAIN-PC:${cfg.port || DEFAULT_PORT}/inbound/sms${tokenPart}`));
+    const build = (host: string) => {
+      const base = `http://${host}:${cfg.port || DEFAULT_PORT}`;
+      setWebhookSms(`${base}/inbound/sms${tokenPart}`);
+      setWebhookEmail(`${base}/inbound/email${tokenPart}`);
+    };
+    void getLanIp().then(build).catch(() => build("YOUR-MAIN-PC"));
   }, []);
 
   if (!draft) return <div className="text-sm text-muted-foreground">Loading...</div>;
@@ -153,6 +157,8 @@ function NotificationsSettings() {
       await setSetting("notify.pingram_api_key", d.pingramApiKey.trim());
       await setSetting("notify.pingram_type", (d.pingramType || "repair_status_update").trim());
       await setSetting("notify.pingram_base_url", (d.pingramBaseUrl || "https://api.pingram.io").trim());
+      await setSetting("notify.pingram_email_enabled", d.pingramEmailEnabled);
+      await setSetting("notify.pingram_sender_domain", d.pingramSenderDomain.trim().replace(/^@+/, ""));
       await setSetting("notify.smtp_host", d.host.trim());
       await setSetting("notify.smtp_port", Number(d.port) || 587);
       await setSetting("notify.smtp_user", d.user.trim());
@@ -219,6 +225,25 @@ function NotificationsSettings() {
           Send status emails to customers
         </label>
 
+        <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-3">
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <Switch checked={d.pingramEmailEnabled} onCheckedChange={(v) => set("pingramEmailEnabled", v)} />
+            Send emails through Pingram (recommended)
+          </label>
+          <p className="text-xs text-muted-foreground">
+            Uses your Pingram API key and verified domain - no separate email server needed. Each email is sent from the signed-in user&apos;s own address, <code className="rounded bg-muted px-1">username@domain</code> (so JURMR sends from <code className="rounded bg-muted px-1">JURMR@iamjrmh.xyz</code>), with the sender name shown as <strong>Name (Role)</strong>, e.g. &quot;Jeremiah (Owner)&quot;. The subject is the ticket&apos;s name and ID. Set the API key and notification type under <strong>Text messages</strong> below (enable the Email channel on that same notification).
+          </p>
+          <div className="space-y-1.5">
+            <Label>Sending domain</Label>
+            <Input value={d.pingramSenderDomain} onChange={(e) => set("pingramSenderDomain", e.target.value)} placeholder="iamjrmh.xyz" />
+            <p className="text-[11px] text-muted-foreground">The domain you verified in Pingram. Each user&apos;s login username becomes the local part of their sender address.</p>
+          </div>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          The SMTP settings below are an optional fallback, only used when &quot;Send emails through Pingram&quot; is off. Gmail works with an app password (requires 2-step verification turned on).
+        </p>
+
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5"><Label>SMTP host</Label><Input value={d.host} onChange={(e) => set("host", e.target.value)} placeholder="smtp.gmail.com" /></div>
           <div className="space-y-1.5"><Label>Port</Label><Input value={String(d.port)} onChange={(e) => set("port", Number(e.target.value) || 587)} placeholder="587" /></div>
@@ -273,10 +298,11 @@ function NotificationsSettings() {
           </div>
 
           <div className="space-y-1.5">
-            <Label>Inbound webhook (for the Inbox)</Label>
-            <Input readOnly value={webhookUrl} className="font-mono text-[11px]" onFocus={(e) => e.currentTarget.select()} />
+            <Label>Inbound webhooks (for the Inbox)</Label>
+            <Input readOnly value={webhookSms} className="font-mono text-[11px]" onFocus={(e) => e.currentTarget.select()} />
+            <Input readOnly value={webhookEmail} className="mt-1.5 font-mono text-[11px]" onFocus={(e) => e.currentTarget.select()} />
             <p className="text-[11px] text-muted-foreground">
-              Paste this into Pingram&apos;s &quot;Enable SMS inbound webhook&quot; so customer replies land in the Inbox (Manager+). This is your main PC&apos;s local address; for Pingram to reach it over the internet, expose your main PC publicly (e.g. a free Cloudflare Tunnel) and use that public URL with the same /inbound/sms path and token.
+              Paste the first into Pingram&apos;s SMS inbound webhook and the second into the Email inbound webhook, so customer replies land in the Inbox (Manager+). These are your main PC&apos;s local address; for Pingram to reach it over the internet, expose your main PC publicly (e.g. a free Cloudflare Tunnel) and swap in that public URL, keeping the same paths and token.
             </p>
           </div>
 

@@ -79,6 +79,8 @@ pub async fn run_server(app: AppHandle, port: u16, key: String) -> Result<(), St
         .route("/capture", post(capture))
         .route("/attach", post(attach))
         .route("/inbound/sms", post(inbound_sms))
+        // Pingram email inbound webhook (same handler; branches on eventType).
+        .route("/inbound/email", post(inbound_sms))
         // Captures and recordings can be large; lift axum's small default limit.
         .layer(DefaultBodyLimit::max(512 * 1024 * 1024))
         .with_state(state);
@@ -287,9 +289,26 @@ async fn attach(
     }
 }
 
-/// Receive an inbound SMS reply from Pingram's webhook and store it in the inbox.
-/// Token-gated via `?token=` when the host has an access key. Pingram's payload
-/// field names vary, so the sender and text are picked defensively.
+/// Crude HTML-to-text: drop tags and collapse whitespace. Good enough to show an
+/// email reply body in the Inbox without rendering markup.
+fn strip_tags(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Receive an inbound reply from Pingram's webhook (SMS or email) and store it in
+/// the inbox. Token-gated via `?token=` when the host has an access key. Pingram's
+/// payload field names vary, so the sender and text are picked defensively, and
+/// `eventType` selects the channel (SMS_INBOUND vs EMAIL_INBOUND).
 async fn inbound_sms(
     State(state): State<Arc<ServerState>>,
     Query(q): Query<HashMap<String, String>>,
@@ -309,43 +328,88 @@ async fn inbound_sms(
         }
         String::new()
     };
-    let from = pick(&["from", "sender", "number", "fromNumber", "source", "msisdn"]);
-    let mut text = pick(&["text", "message", "body", "content", "sms"]);
-    if text.is_empty() {
-        text = body.to_string();
-    }
 
-    // Match a customer by the last 10 digits of the sender's number.
-    let digits: String = from.chars().filter(|c| c.is_ascii_digit()).collect();
-    let last10 = if digits.len() >= 10 {
-        digits[digits.len() - 10..].to_string()
+    let event_type = pick(&["eventType", "event", "type"]);
+    let is_email = event_type.eq_ignore_ascii_case("EMAIL_INBOUND")
+        || (event_type.is_empty() && (body.get("bodyText").is_some() || body.get("bodyHtml").is_some()));
+
+    let from = pick(&["from", "sender", "fromAddress", "email", "number", "fromNumber", "source", "msisdn"]);
+
+    // Build the channel, displayed body, and how to match a customer.
+    let (channel, text): (&str, String) = if is_email {
+        let subject = pick(&["subject"]);
+        let mut t = pick(&["bodyText", "text", "message"]);
+        if t.is_empty() {
+            t = strip_tags(&pick(&["bodyHtml", "html"]));
+        }
+        let combined = match (subject.is_empty(), t.is_empty()) {
+            (false, false) => format!("{subject}\n\n{t}"),
+            (false, true) => subject,
+            _ => t,
+        };
+        ("email", combined)
     } else {
-        String::new()
+        let mut t = pick(&["text", "message", "body", "content", "sms"]);
+        if t.is_empty() {
+            t = body.to_string();
+        }
+        ("sms", t)
     };
+
     let mut cust_id: Option<i64> = None;
     let mut cust_name: Option<String> = None;
-    if last10.len() == 10 {
-        if let Ok(rows) = sqlx::query(
-            "SELECT id, name, phone FROM customers WHERE deleted_at IS NULL AND phone IS NOT NULL",
-        )
-        .fetch_all(&state.pool)
-        .await
-        {
-            for r in rows {
-                let phone: String = r.try_get("phone").unwrap_or_default();
-                let pd: String = phone.chars().filter(|c| c.is_ascii_digit()).collect();
-                if pd.len() >= 10 && pd.ends_with(&last10) {
-                    cust_id = r.try_get::<i64, _>("id").ok();
-                    cust_name = r.try_get::<String, _>("name").ok();
-                    break;
+    if is_email {
+        // Match a customer by email address (case-insensitive).
+        let key = from.trim().to_lowercase();
+        if !key.is_empty() {
+            if let Ok(rows) = sqlx::query(
+                "SELECT id, name, email FROM customers WHERE deleted_at IS NULL AND email IS NOT NULL",
+            )
+            .fetch_all(&state.pool)
+            .await
+            {
+                for r in rows {
+                    let email: String = r.try_get("email").unwrap_or_default();
+                    if email.trim().to_lowercase() == key {
+                        cust_id = r.try_get::<i64, _>("id").ok();
+                        cust_name = r.try_get::<String, _>("name").ok();
+                        break;
+                    }
+                }
+            }
+        }
+    } else {
+        // Match a customer by the last 10 digits of the sender's number.
+        let digits: String = from.chars().filter(|c| c.is_ascii_digit()).collect();
+        let last10 = if digits.len() >= 10 {
+            digits[digits.len() - 10..].to_string()
+        } else {
+            String::new()
+        };
+        if last10.len() == 10 {
+            if let Ok(rows) = sqlx::query(
+                "SELECT id, name, phone FROM customers WHERE deleted_at IS NULL AND phone IS NOT NULL",
+            )
+            .fetch_all(&state.pool)
+            .await
+            {
+                for r in rows {
+                    let phone: String = r.try_get("phone").unwrap_or_default();
+                    let pd: String = phone.chars().filter(|c| c.is_ascii_digit()).collect();
+                    if pd.len() >= 10 && pd.ends_with(&last10) {
+                        cust_id = r.try_get::<i64, _>("id").ok();
+                        cust_name = r.try_get::<String, _>("name").ok();
+                        break;
+                    }
                 }
             }
         }
     }
 
     let _ = sqlx::query(
-        "INSERT INTO inbox_messages (channel, from_addr, from_name, customer_id, body) VALUES ('sms', ?1, ?2, ?3, ?4)",
+        "INSERT INTO inbox_messages (channel, from_addr, from_name, customer_id, body) VALUES (?1, ?2, ?3, ?4, ?5)",
     )
+    .bind(channel)
     .bind(&from)
     .bind(&cust_name)
     .bind(cust_id)

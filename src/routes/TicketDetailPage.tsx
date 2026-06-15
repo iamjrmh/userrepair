@@ -101,6 +101,7 @@ export default function TicketDetailPage() {
         preferredContact: customer?.preferred_contact ?? null,
         customerName: customer?.name ?? "there",
         ticketNumber: ticket.ticket_number,
+        ticketTitle: ticket.title,
         deviceLabel: ticket.device_label,
         status: to,
       });

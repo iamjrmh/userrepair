@@ -63,6 +63,7 @@ pub fn run() {
             commands::camera::save_capture,
             commands::email::send_email,
             commands::pingram::send_pingram,
+            commands::pingram::send_pingram_email,
         ])
         .run(tauri::generate_context!())
         .expect("error while running userrepair");

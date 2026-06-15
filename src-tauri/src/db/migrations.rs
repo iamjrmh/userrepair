@@ -117,5 +117,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("0018_inbox.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 19,
+            description: "outbox transport channel + per-user sender (Pingram email)",
+            sql: include_str!("0019_outbox_pingram.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

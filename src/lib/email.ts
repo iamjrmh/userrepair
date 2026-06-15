@@ -6,6 +6,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getSetting } from "@/lib/repos/settings";
 import { useBrandStore } from "@/stores/brand";
+import { useAuthStore } from "@/stores/auth";
+import type { TechRole } from "@/types";
 import {
   enqueueEmail,
   claimEmail,
@@ -34,13 +36,18 @@ export interface SmtpConfig {
   pingramEnabled: boolean;
   /** Server API key (looks like pingram_sk_...). */
   pingramApiKey: string;
-  /** The notification "type" created in Pingram with an SMS channel enabled. */
+  /** The notification "type" created in Pingram with the SMS/Email channels enabled. */
   pingramType: string;
   pingramBaseUrl: string;
+  // Pingram email: send status emails from each user's address on a verified domain.
+  pingramEmailEnabled: boolean;
+  /** The verified sending domain, e.g. "iamjrmh.xyz" (sender becomes username@domain). */
+  pingramSenderDomain: string;
 }
 
 export const PINGRAM_DEFAULT_BASE_URL = "https://api.pingram.io";
 export const PINGRAM_DEFAULT_TYPE = "repair_status_update";
+export const PINGRAM_DEFAULT_SENDER_DOMAIN = "iamjrmh.xyz";
 
 /**
  * Carrier email-to-SMS gateways (US + Canada), de-duplicated to one address per
@@ -108,6 +115,7 @@ export async function loadSmtpConfig(): Promise<SmtpConfig> {
   const [
     enabled, smsEnabled, host, port, user, pass, fromName, fromEmail, statuses,
     pingramEnabled, pingramApiKey, pingramType, pingramBaseUrl,
+    pingramEmailEnabled, pingramSenderDomain,
   ] = await Promise.all([
     getSetting<boolean>("notify.enabled", false),
     getSetting<boolean>("notify.sms_enabled", false),
@@ -122,12 +130,37 @@ export async function loadSmtpConfig(): Promise<SmtpConfig> {
     getSetting<string>("notify.pingram_api_key", ""),
     getSetting<string>("notify.pingram_type", PINGRAM_DEFAULT_TYPE),
     getSetting<string>("notify.pingram_base_url", PINGRAM_DEFAULT_BASE_URL),
+    getSetting<boolean>("notify.pingram_email_enabled", false),
+    getSetting<string>("notify.pingram_sender_domain", PINGRAM_DEFAULT_SENDER_DOMAIN),
   ]);
   return {
     enabled, smsEnabled, host, port: port || 587, user, pass, fromName, fromEmail, statuses,
     pingramEnabled, pingramApiKey, pingramType: pingramType || PINGRAM_DEFAULT_TYPE,
     pingramBaseUrl: pingramBaseUrl || PINGRAM_DEFAULT_BASE_URL,
+    pingramEmailEnabled, pingramSenderDomain: pingramSenderDomain || PINGRAM_DEFAULT_SENDER_DOMAIN,
   };
+}
+
+/** Human label for a role, e.g. "owner" -> "Owner". */
+function roleLabel(role: TechRole): string {
+  return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
+export interface EmailSender {
+  name: string; // "Jeremiah (Owner)"
+  address: string; // "JURMR@iamjrmh.xyz"
+}
+
+/**
+ * The per-user sender for Pingram emails, derived from the signed-in user and the
+ * shop's verified domain: address = username@domain, name = "Name (Role)". Returns
+ * null when there's no signed-in user or no domain configured.
+ */
+export function currentEmailSender(domain: string): EmailSender | null {
+  const user = useAuthStore.getState().user;
+  const d = domain.trim().replace(/^@+/, "");
+  if (!user || !user.username || !d) return null;
+  return { name: `${user.name} (${roleLabel(user.role)})`, address: `${user.username.trim()}@${d}` };
 }
 
 export interface ShopBranding {
@@ -435,9 +468,41 @@ async function sendPingramSms(
   });
 }
 
-/** True when Pingram has everything it needs to send. */
+/** True when Pingram has everything it needs to send a text. */
 function pingramReady(cfg: SmtpConfig): boolean {
   return cfg.pingramEnabled && !!cfg.pingramApiKey && !!cfg.pingramType;
+}
+
+/** True when Pingram email is enabled and configured (key, type, domain). */
+function pingramEmailReady(cfg: SmtpConfig): boolean {
+  return cfg.pingramEmailEnabled && !!cfg.pingramApiKey && !!cfg.pingramType && !!cfg.pingramSenderDomain;
+}
+
+/** True when the shop's own SMTP server is configured. */
+function smtpReady(cfg: SmtpConfig): boolean {
+  return !!cfg.host && !!(cfg.fromEmail || cfg.user);
+}
+
+/** Send one email through Pingram (uses the shop's verified sending domain). */
+async function sendPingramEmail(
+  cfg: SmtpConfig,
+  to: string,
+  subject: string,
+  html: string,
+  fromName: string,
+  fromAddr: string,
+): Promise<void> {
+  await invoke("send_pingram_email", {
+    baseUrl: cfg.pingramBaseUrl,
+    apiKey: cfg.pingramApiKey,
+    notificationType: cfg.pingramType,
+    to,
+    subject,
+    html,
+    fromName: fromName || null,
+    fromAddress: fromAddr || null,
+    replyTo: fromAddr || null,
+  });
 }
 
 export interface StatusNotifyArgs {
@@ -447,6 +512,8 @@ export interface StatusNotifyArgs {
   preferredContact: string | null;
   customerName: string;
   ticketNumber: string;
+  /** The ticket's title (its "name"), used to build the email subject. */
+  ticketTitle: string | null;
   deviceLabel: string | null;
   status: string;
 }
@@ -467,18 +534,20 @@ export interface NotifyResult {
  */
 export async function notifyTicketStatus(args: StatusNotifyArgs): Promise<NotifyResult> {
   const cfg = await loadSmtpConfig();
-  // Shared gates: SMTP must be configured and the status opted in.
-  if (!cfg.host || !(cfg.fromEmail || cfg.user)) return { sent: false, reason: "not configured" };
+  // Gate: the status must be opted in, and at least one transport configured.
   if (!cfg.statuses.includes(args.status)) return { sent: false, reason: "status off" };
+  if (!pingramEmailReady(cfg) && !smtpReady(cfg) && !pingramReady(cfg)) {
+    return { sent: false, reason: "not configured" };
+  }
 
   const shop = await loadShopBranding();
   const device = args.deviceLabel && args.deviceLabel.trim() ? args.deviceLabel : "device";
 
   let result: NotifyResult = { sent: false, reason: "nothing to send" };
 
-  // Email channel.
+  // Email channel. Prefers Pingram (per-user verified sender); falls back to the
+  // shop's own SMTP server when Pingram email is off.
   if (cfg.enabled && args.customerEmail && args.customerEmail.includes("@")) {
-    const { headline } = statusContent(args.status, device);
     const html = buildStatusEmailHtml({
       shop,
       customerName: args.customerName,
@@ -486,12 +555,30 @@ export async function notifyTicketStatus(args: StatusNotifyArgs): Promise<Notify
       deviceLabel: args.deviceLabel,
       status: args.status,
     });
-    const subject = `${headline} - ${args.ticketNumber}`;
-    const id = await enqueueEmail(args.customerEmail, subject, html, true);
-    const ok = await trySendOutboxItem(cfg, {
-      id, to_email: args.customerEmail, subject, html_body: html, status: "pending", attempts: 0, is_html: 1,
-    });
-    result = ok ? { sent: true } : { sent: false, queued: true, reason: "queued" };
+    // Subject is the ticket's name and its ID, e.g. "Screen replacement - RS-0042".
+    const ticketName = args.ticketTitle && args.ticketTitle.trim() ? args.ticketTitle.trim() : statusContent(args.status, device).headline;
+    const subject = `${ticketName} - ${args.ticketNumber}`;
+
+    const usePingram = pingramEmailReady(cfg);
+    const sender = usePingram ? currentEmailSender(cfg.pingramSenderDomain) : null;
+    // Pingram needs a signed-in user to derive the sender; otherwise use SMTP.
+    if (usePingram && sender) {
+      const id = await enqueueEmail(args.customerEmail, subject, html, {
+        channel: "pingram", fromName: sender.name, fromAddr: sender.address,
+      });
+      const ok = await trySendOutboxItem(cfg, {
+        id, to_email: args.customerEmail, subject, html_body: html, status: "pending", attempts: 0, is_html: 1,
+        channel: "pingram", from_name: sender.name, from_addr: sender.address,
+      });
+      result = ok ? { sent: true } : { sent: false, queued: true, reason: "queued" };
+    } else if (smtpReady(cfg)) {
+      const id = await enqueueEmail(args.customerEmail, subject, html, { channel: "smtp" });
+      const ok = await trySendOutboxItem(cfg, {
+        id, to_email: args.customerEmail, subject, html_body: html, status: "pending", attempts: 0, is_html: 1,
+        channel: "smtp", from_name: "", from_addr: "",
+      });
+      result = ok ? { sent: true } : { sent: false, queued: true, reason: "queued" };
+    }
   }
 
   // Text channel: only when the customer's preferred contact method is SMS.
@@ -519,7 +606,7 @@ export async function notifyTicketStatus(args: StatusNotifyArgs): Promise<Notify
       const digits = normalizePhone(args.customerPhone);
       if (digits) {
         for (const domain of SMS_GATEWAYS) {
-          await enqueueEmail(`${digits}@${domain}`, "", text, false);
+          await enqueueEmail(`${digits}@${domain}`, "", text, { isHtml: false, channel: "smtp" });
         }
         result.smsQueued = true;
         void flushOutbox();
@@ -533,7 +620,11 @@ export async function notifyTicketStatus(args: StatusNotifyArgs): Promise<Notify
 async function trySendOutboxItem(cfg: SmtpConfig, item: OutboxEmail): Promise<boolean> {
   if (!(await claimEmail(item.id))) return false; // another flush / PC is handling it
   try {
-    await sendEmail(cfg, item.to_email, item.subject, item.html_body, item.is_html !== 0);
+    if (item.channel === "pingram") {
+      await sendPingramEmail(cfg, item.to_email, item.subject, item.html_body, item.from_name, item.from_addr);
+    } else {
+      await sendEmail(cfg, item.to_email, item.subject, item.html_body, item.is_html !== 0);
+    }
     await markEmailSent(item.id);
     return true;
   } catch (e) {
@@ -543,13 +634,13 @@ async function trySendOutboxItem(cfg: SmtpConfig, item: OutboxEmail): Promise<bo
 }
 
 /**
- * Send any queued emails. Safe to call often (a no-op when nothing waits). Used
- * by the background flusher on launch and whenever the internet returns. Sends
- * even if notifications were later turned off, as long as SMTP is configured.
+ * Send any queued items. Safe to call often (a no-op when nothing waits). Used by
+ * the background flusher on launch and whenever the internet returns. Sends even
+ * if notifications were later turned off, as long as a transport is configured.
  */
 export async function flushOutbox(): Promise<{ sent: number; remaining: number }> {
   const cfg = await loadSmtpConfig();
-  if (!cfg.host || !(cfg.fromEmail || cfg.user)) {
+  if (!smtpReady(cfg) && !pingramEmailReady(cfg)) {
     return { sent: 0, remaining: await pendingEmailCount() };
   }
   await resetStaleSending(new Date(Date.now() - 120000).toISOString());
@@ -563,7 +654,7 @@ export async function flushOutbox(): Promise<{ sent: number; remaining: number }
   return { sent, remaining: await pendingEmailCount() };
 }
 
-/** Send a sample email to a chosen address to verify the SMTP setup. */
+/** Send a sample email to verify the setup (via Pingram when enabled, else SMTP). */
 export async function sendTestEmail(cfg: SmtpConfig, to: string): Promise<void> {
   const shop = await loadShopBranding();
   const html = buildStatusEmailHtml({
@@ -573,10 +664,17 @@ export async function sendTestEmail(cfg: SmtpConfig, to: string): Promise<void> 
     deviceLabel: "iPhone 12",
     status: "Awaiting Pickup",
   });
-  await sendEmail(cfg, to, `Test email from ${shop.name}`, html, true);
+  const subject = `Test email from ${shop.name}`;
+  if (pingramEmailReady(cfg)) {
+    const sender = currentEmailSender(cfg.pingramSenderDomain);
+    if (!sender) throw new Error("Sign in first - the sender is your account's username@domain");
+    await sendPingramEmail(cfg, to, subject, html, sender.name, sender.address);
+    return;
+  }
+  await sendEmail(cfg, to, subject, html, true);
 }
 
-/** Send a manager's reply (free text) to a number via Pingram. Used by the Inbox. */
+/** Send a manager's reply (free text) to a customer via Pingram. Used by the Inbox. */
 export async function sendPingramReply(phone: string, message: string): Promise<void> {
   const cfg = await loadSmtpConfig();
   if (!pingramReady(cfg)) {
@@ -585,6 +683,24 @@ export async function sendPingramReply(phone: string, message: string): Promise<
   const e164 = normalizePhoneE164(phone);
   if (!e164) throw new Error("Invalid phone number");
   await sendPingramSms(cfg, e164, message);
+}
+
+/**
+ * Reply to an inbox message on its own channel: a text reply for SMS, or an email
+ * (from the signed-in user) for an email reply.
+ */
+export async function sendInboxReply(channel: string, to: string, message: string): Promise<void> {
+  if (channel === "email") {
+    const cfg = await loadSmtpConfig();
+    if (!pingramEmailReady(cfg)) throw new Error("Pingram email is not set up in Settings -> Notifications");
+    const sender = currentEmailSender(cfg.pingramSenderDomain);
+    if (!sender) throw new Error("Sign in first - replies are sent from your account's address");
+    const shop = await loadShopBranding();
+    const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;color:#0F172A;line-height:1.6;white-space:pre-wrap">${esc(message)}</div>`;
+    await sendPingramEmail(cfg, to, `Re: your message to ${shop.name}`, html, sender.name, sender.address);
+    return;
+  }
+  await sendPingramReply(to, message);
 }
 
 /** Send a sample text via Pingram (real SMS) to verify the Pingram setup. */

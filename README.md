@@ -89,7 +89,7 @@ Built with **Tauri 2 (Rust)** + **React + TypeScript**.
 - **Financial**: revenue / expense, P&L, invoices. **Reporting** shows inventory value and inventory sale total (with the margin between), throughput, and most-failed components, all with CSV export.
 - **Multi-PC**: run it on several computers in the shop, all sharing one machine's data over the LAN, with **live refresh** and **automatic reconnect**.
 - **In-app updates**: a top-bar button checks for a new version on launch and on demand, shows a dot when one is ready, and installs it silently when you choose to. No auto-update.
-- **Customer notifications**: email customers a polished status update (with a repair-progress stepper) as their repair moves forward, through your own SMTP provider, plus **real text messages** via Pingram (with free email-to-SMS as a backup) for customers whose preferred contact is SMS. A **Manager Inbox** shows their replies so you can text back. Queued and retried if the internet is down.
+- **Customer notifications**: email customers a polished status update (with a repair-progress stepper) and send **real text messages**, both through Pingram on a single API key - emails go out from each user's own address on your verified domain (`username@yourdomain`, sender name "Name (Role)"), and texts reach customers whose preferred contact is SMS. SMTP and free email-to-SMS remain as backups. A **Manager Inbox** shows their text and email replies so you can answer back. Queued and retried if the internet is down.
 - **Extras**: global search (`Ctrl+K`), backup and restore, your own logo, dark mode, plugin foundation.
 
 ---
@@ -163,7 +163,7 @@ Everything is under **Settings**:
   Includes a manual refund tool. Refunds over a set amount require manager approval.
 - **Receipt** - choose 58mm or 80mm paper, set a footer message, and print a test receipt.
 - **Rewards** - turn the program on and set points-per-dollar and redemption value.
-- **Notifications** - email customers on status changes via your own SMTP (Gmail works with an app password); choose which statuses notify and send a test. **Text messages** go out via **Pingram** (real carrier SMS, it handles A2P 10DLC) to customers whose preferred contact is SMS, with a free **email-to-SMS** fallback. Replies arrive in the **Inbox** (Manager+) when you point Pingram's inbound webhook at your main PC (see [Receiving text replies](#receiving-text-replies-cloudflare-tunnel)).
+- **Notifications** - email customers on status changes and send **text messages**, both via **Pingram** on one API key (real carrier SMS, it handles A2P 10DLC; emails come from each user's `username@yourdomain` address, sender name "Name (Role)", subject from the ticket name and ID). Choose which statuses notify and send tests. Your own SMTP and free **email-to-SMS** stay available as fallbacks. Text and email replies arrive in the **Inbox** (Manager+) when you point Pingram's inbound webhooks at your main PC (see [Receiving replies](#receiving-replies-cloudflare-tunnel)).
 - **Network** - see this PC's role (standalone / main / client) and connection details.
 - **Bench** - set the folder where microscope photos and recordings are saved (on a multi-PC setup, every PC's captures are sent to this folder on the main PC).
 - **Staff** - create accounts, reset passwords, deactivate.
@@ -218,25 +218,29 @@ A few things to know:
 
 ---
 
-## Setting up text messages (Pingram)
+## Setting up notifications (Pingram)
 
-Real carrier texts go out through [Pingram](https://www.pingram.io). One API key is all userrepair needs - there is no Client ID, Client Secret, or Notification ID.
+Both real carrier texts and status emails go out through [Pingram](https://www.pingram.io) on a single API key - there is no Client ID, Client Secret, or Notification ID, and no separate email server to run.
 
-1. Create a Pingram account and add an SMS sender (Pingram handles the A2P 10DLC carrier registration for you).
-2. Create a **notification** named `repair_status_update` and enable its **SMS** channel. userrepair sends the message text inline, so the template body can be left as-is.
+1. Create a Pingram account and add an SMS sender (Pingram handles the A2P 10DLC carrier registration for you). To also send email, **verify your domain** in Pingram (e.g. `iamjrmh.xyz`).
+2. Create a **notification** named `repair_status_update` and enable its **SMS** and **Email** channels. userrepair sends the message text and HTML inline, so the templates can be left as-is.
 3. Open the **Environments** section of the Pingram dashboard and copy the **API key** (it looks like `pingram_sk_...`).
-4. In userrepair, go to **Settings -> Notifications -> Text messages**, turn on "Text customers via Pingram", and paste:
-   - **API key** - the `pingram_sk_...` key
-   - **Notification type** - `repair_status_update` (or whatever you named it)
-5. Click **Send test (Pingram)** to confirm a text arrives.
+4. In userrepair, go to **Settings -> Notifications**:
+   - Under **Text messages**, turn on "Text customers via Pingram" and paste the **API key** and **Notification type** (`repair_status_update`).
+   - Under **Email notifications**, turn on "Send emails through Pingram" and enter your **Sending domain** (the one you verified, e.g. `iamjrmh.xyz`).
+5. Click **Send test (Pingram)** and **Send test** to confirm a text and an email arrive.
 
-Customers are only texted when their **preferred contact** is set to SMS. When a customer texts back, Pingram auto-replies with a short "we got your message" note and the reply lands in the **Inbox** (see below).
+**How emails are addressed.** Each email is sent from the signed-in user's own address on your verified domain - the login username is the local part, so user `JURMR` sends from `JURMR@iamjrmh.xyz`. The sender name shows as **Name (Role)**, for example "Jeremiah (Owner)" or "Tim (Technician)". The subject is the ticket's name and ID, like `Screen replacement - RS-0042`.
+
+Customers are texted only when their **preferred contact** is set to SMS, and emailed when they have an email on file. When a customer replies to a text, Pingram auto-replies with a short "we got your message" note, and every reply (text or email) lands in the **Inbox** (see below).
 
 ---
 
-## Receiving text replies (Cloudflare Tunnel)
+## Receiving replies (Cloudflare Tunnel)
 
-Sending texts works on its own. To also receive **replies** in the **Inbox**, Pingram (which lives in the cloud) needs to reach your main PC, and the main PC only listens on your local network. A free **Cloudflare Tunnel** gives your main PC a public HTTPS address without opening any ports.
+Sending texts and emails works on its own. To also receive **replies** in the **Inbox**, Pingram (which lives in the cloud) needs to reach your main PC, and the main PC only listens on your local network. A free **Cloudflare Tunnel** gives your main PC a public HTTPS address without opening any ports.
+
+> **About the token.** The `?token=...` on the webhook URL is **not** a Cloudflare value - it is your userrepair host's own access key (the one set when you chose "This is the main PC"). userrepair builds the full webhook URL for you, token included, in **Settings -> Notifications -> Inbound webhooks** - just copy it from there. If your main PC has no access key, leave the `?token=...` part off entirely.
 
 You only need this for the Inbox. Set it up on the **main PC** (the one running in "This is the main PC" mode).
 
@@ -254,13 +258,14 @@ This is the fastest way to confirm replies work. The host server runs on port `8
 cloudflared tunnel --url http://localhost:8787
 ```
 
-It prints a URL like `https://random-words.trycloudflare.com`. Your inbound webhook is that URL plus the path and token shown in **Settings -> Notifications**, for example:
+It prints a URL like `https://random-words.trycloudflare.com`. Take the two ready-made webhook URLs from **Settings -> Notifications -> Inbound webhooks** and swap their `http://YOUR-MAIN-PC:8787` part for that Cloudflare URL, keeping the paths and token. You end up with:
 
 ```
 https://random-words.trycloudflare.com/inbound/sms?token=YOUR-ACCESS-KEY
+https://random-words.trycloudflare.com/inbound/email?token=YOUR-ACCESS-KEY
 ```
 
-Paste that into Pingram (**SMS -> Inbound -> Enable SMS inbound webhook -> Save**), text your shop number, and the reply should appear in the Inbox. Note: this temporary URL changes every time you restart the command, so it is for testing.
+Paste the first into Pingram's **SMS -> Inbound** webhook and the second into its **Email -> Inbound** webhook, then text or email your shop and the reply should appear in the Inbox. Note: this temporary URL changes every time you restart the command, so it is for testing.
 
 **3. Permanent setup (stable URL, recommended)**
 
@@ -290,7 +295,7 @@ cloudflared tunnel run userrepair
 cloudflared service install
 ```
 
-Your stable webhook becomes `https://sms.yourshop.com/inbound/sms?token=YOUR-ACCESS-KEY`. Paste that into Pingram once and you are done.
+Your stable webhooks become `https://sms.yourshop.com/inbound/sms?token=YOUR-ACCESS-KEY` and `https://sms.yourshop.com/inbound/email?token=YOUR-ACCESS-KEY`. Paste them into Pingram once and you are done.
 
 **Notes**
 
@@ -366,7 +371,7 @@ src/                  React + TypeScript frontend
 src-tauri/            Rust backend
   src/db/             migrations.rs + schema.sql + seed_*.sql
   src/commands/       db_tx, square, auth, backup, attachments, camera, update, email, pingram, system, net
-  src/server.rs       embedded LAN host server (axum) for multi-PC mode (DB, /cmd, /capture, /attach, /inbound/sms)
+  src/server.rs       embedded LAN host server (axum) for multi-PC mode (DB, /cmd, /capture, /attach, /inbound/sms, /inbound/email)
   capabilities/       Tauri 2 ACL
 scripts/              icon + catalog generators
 plugins/              example plugin manifest
